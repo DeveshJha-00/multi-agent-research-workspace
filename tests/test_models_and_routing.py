@@ -1,0 +1,37 @@
+import pytest
+from langchain_core.documents import Document
+from pydantic import ValidationError
+
+from src.models.query_request import QueryRequest
+from src.models.route_identifier import RouteIdentifier
+from src.tools.graph_tools import retrieval_decision, routing_tool
+
+
+def test_query_request_strips_text_and_validates_session():
+    request = QueryRequest(query="  hello  ", session_id="session-123")
+    assert request.query == "hello"
+    with pytest.raises(ValidationError):
+        QueryRequest(query="hello", session_id="bad id")
+
+
+def test_route_is_strict_literal():
+    with pytest.raises(ValidationError):
+        RouteIdentifier(route="anything", reason="invalid")
+
+
+@pytest.mark.parametrize(
+    ("route", "expected"),
+    [("index", "rerank"), ("general", "general_llm"), ("search", "web_search")],
+)
+def test_primary_routing(route, expected):
+    assert routing_tool({"route": route}) == expected
+
+
+def test_retrieval_decision_generates_for_relevant_documents():
+    document = Document(page_content="answer", metadata={"rerank_score": 0.95})
+    assert retrieval_decision({"reranked_documents": [document], "retry_count": 0}) == "generate"
+
+
+def test_retrieval_decision_is_bounded():
+    assert retrieval_decision({"reranked_documents": [], "retry_count": 0}) == "rewrite"
+    assert retrieval_decision({"reranked_documents": [], "retry_count": 1}) == "web_search"

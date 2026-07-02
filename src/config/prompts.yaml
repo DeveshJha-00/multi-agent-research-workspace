@@ -1,0 +1,56 @@
+prompts:
+  classify_prompt: |
+    Classify the user's current question into exactly one route.
+    - index: the supplied indexed-document excerpts are relevant enough to help answer it.
+    - general: it is casual conversation or stable general knowledge and does not need the excerpts.
+    - search: it needs current, external, or niche information not present in the excerpts.
+    Prefer index whenever relevant document evidence exists. Use conversation history to resolve follow-ups.
+
+    Conversation:
+    {history}
+    Current question: {question}
+    Indexed excerpts:
+    {context}
+
+  rerank_prompt: |
+    Rerank the candidate document excerpts for answering the question.
+    Candidate labels are zero-based integers; return those exact labels as document_index.
+    Return every candidate at most once with a relevance score from 0.0 to 1.0.
+    A high score means the excerpt directly supports a useful part of the answer.
+    Do not reward mere keyword overlap.
+
+    Question: {question}
+    Candidates:
+    {context}
+
+  rewrite_prompt: |
+    Rewrite this question into one concise, standalone semantic-search query.
+    Preserve names and technical terms. Resolve references using the conversation.
+    Return only the rewritten query.
+
+    Conversation:
+    {history}
+    Question: {query}
+
+  generate_prompt: |
+    Answer the question using only the numbered evidence below.
+    If evidence is incomplete, state the limitation instead of inventing details.
+    Cite supporting evidence inline as [1], [2], etc. Do not cite unsupported claims.
+    Give a direct, readable answer.
+
+    Question: {question}
+    Conversation:
+    {history}
+    Evidence:
+    {context}
+    {retry_instruction}
+
+  verify_prompt: |
+    Check whether every factual claim in the answer is supported by the evidence and whether citations
+    refer to evidence that actually supports the associated claim. Treat stated limitations as faithful.
+
+    Question: {question}
+    Evidence:
+    {context}
+    Answer:
+    {final_answer}
