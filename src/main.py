@@ -6,9 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.agent_routes import router as agent_router
 from src.api.routes import router
 from src.core.config import settings
 from src.core.logger import configure_logging, logger
+from src.db.artifact_store import initialize_artifact_store
+from src.db.evidence_store import initialize_evidence_store
 from src.db.mongo_client import close_mongodb, initialize_mongodb, mongodb_ready
 from src.rag.retriever_setup import close_qdrant, initialize_qdrant, qdrant_ready
 
@@ -18,6 +21,7 @@ async def lifespan(app: FastAPI):
     configure_logging()
     settings.validate_runtime()
     await asyncio.gather(initialize_mongodb(), initialize_qdrant())
+    await asyncio.gather(initialize_evidence_store(), initialize_artifact_store())
     logger.info("Application dependencies initialized")
     yield
     await close_qdrant()
@@ -37,6 +41,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-Description", "X-Session-ID"],
 )
 app.include_router(router)
+app.include_router(agent_router)
 
 
 @app.get("/")

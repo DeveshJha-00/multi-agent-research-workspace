@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
     embedding_batch_size: int = Field(default=64, ge=1, le=256)
     max_history_messages: int = Field(default=30, ge=2, le=200)
+    agent_max_iterations: int = Field(default=5, ge=1, le=12)
+    supervisor_max_workers: int = Field(default=4, ge=1, le=8)
+    agent_max_revisions: int = Field(default=1, ge=0, le=3)
 
     @field_validator("cors_origins", mode="before")
     @classmethod
