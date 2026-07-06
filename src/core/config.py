@@ -22,16 +22,23 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:8501"])
 
-    openai_api_key: str = ""
-    openai_chat_model: str = "gpt-4o"
-    openai_embedding_model: str = "text-embedding-3-small"
-    embedding_dimensions: int = Field(default=1536, gt=0)
+    llm_provider: Literal["groq"] = "groq"
+    groq_api_key: str = ""
+    groq_chat_model: str = "openai/gpt-oss-20b"
+    embedding_provider: Literal["fastembed"] = "fastembed"
+    fastembed_model: str = "BAAI/bge-small-en-v1.5"
+    fastembed_cache_dir: str = ".cache/fastembed"
+    embedding_dimensions: int = Field(default=384, gt=0)
+    reranker_model: str = "ms-marco-TinyBERT-L-2-v2"
+    reranker_cache_dir: str = ".cache/flashrank"
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    groq_max_output_tokens: int = Field(default=1200, ge=128, le=4096)
+    groq_requests_per_second: float = Field(default=0.2, gt=0.0, le=1.0)
     tavily_api_key: str = ""
 
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
-    qdrant_collection: str = "adaptive_rag_documents"
+    qdrant_collection: str = "agentic_workspace_bge_v1"
     qdrant_timeout_seconds: int = Field(default=20, gt=0)
 
     mongodb_url: str = "mongodb://localhost:27017"
@@ -50,9 +57,15 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
     embedding_batch_size: int = Field(default=64, ge=1, le=256)
     max_history_messages: int = Field(default=30, ge=2, le=200)
-    agent_max_iterations: int = Field(default=5, ge=1, le=12)
-    supervisor_max_workers: int = Field(default=4, ge=1, le=8)
+    agent_max_iterations: int = Field(default=3, ge=1, le=12)
+    supervisor_max_workers: int = Field(default=2, ge=1, le=8)
     agent_max_revisions: int = Field(default=1, ge=0, le=3)
+    max_dataset_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
+    max_dataset_rows: int = Field(default=10_000, ge=100, le=100_000)
+    max_dataset_columns: int = Field(default=100, ge=2, le=500)
+    agent_tool_result_chars: int = Field(default=8000, ge=1000, le=16000)
+    critic_results_chars: int = Field(default=3000, ge=1000, le=12000)
+    critic_evidence_chars: int = Field(default=6000, ge=2000, le=16000)
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -64,14 +77,30 @@ class Settings(BaseSettings):
     def validate_runtime(self) -> None:
         """Fail fast when a required integration is not configured."""
         missing = []
-        if not self.openai_api_key:
-            missing.append("OPENAI_API_KEY")
-        if not self.tavily_api_key:
+        if not self.groq_configured:
+            missing.append("GROQ_API_KEY")
+        if not self.tavily_configured:
             missing.append("TAVILY_API_KEY")
         if missing:
             raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
         if self.chunk_overlap >= self.chunk_size:
             raise RuntimeError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+
+    @staticmethod
+    def _credential_is_configured(value: str | None) -> bool:
+        if not value:
+            return False
+        normalized = value.strip().lower()
+        placeholders = ("replace-me", "replace-with", "your-")
+        return not any(marker in normalized for marker in placeholders)
+
+    @property
+    def groq_configured(self) -> bool:
+        return self._credential_is_configured(self.groq_api_key)
+
+    @property
+    def tavily_configured(self) -> bool:
+        return self._credential_is_configured(self.tavily_api_key)
 
 
 @lru_cache

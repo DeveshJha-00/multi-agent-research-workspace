@@ -14,7 +14,7 @@ from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from src.core.config import settings
-from src.llms.openai import get_embeddings
+from src.llms.provider import get_embeddings
 
 logger = logging.getLogger(__name__)
 

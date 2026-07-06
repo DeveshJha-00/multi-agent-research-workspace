@@ -33,7 +33,7 @@ class DeleteResponse(BaseModel):
 
 
 class ResearchRequest(BaseModel):
-    objective: str = Field(min_length=10, max_length=8000)
+    objective: str = Field(min_length=10, max_length=2000)
     session_id: str = Field(min_length=8, max_length=200, pattern=r"^[A-Za-z0-9._:-]+$")
     available_data: list[str] = Field(default_factory=list, max_length=20)
 
@@ -44,3 +44,11 @@ class ResearchResponse(BaseModel):
     worker_results: list[AgentResult]
     critique: Critique
     artifacts: list[ArtifactRecord]
+
+
+class DatasetUploadResponse(BaseModel):
+    dataset_id: str
+    filename: str
+    description: str
+    columns: list[str]
+    row_count: int

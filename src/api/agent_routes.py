@@ -4,15 +4,36 @@ import logging
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, File, Header, HTTPException, Response, UploadFile, status
+from groq import APIError, RateLimitError
 
 from src.core.config import settings
+from src.core.integration_errors import groq_error_detail, groq_rate_limit_detail
+from src.data.ingestion import ingest_dataset
 from src.db.artifact_store import get_artifact
-from src.models.api import ResearchRequest, ResearchResponse
+from src.db.dataset_store import list_datasets
+from src.models.api import DatasetUploadResponse, ResearchRequest, ResearchResponse
 from src.orchestration.research_graph import research_orchestrator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["multi-agent"])
+
+
+@router.post("/datasets/upload", response_model=DatasetUploadResponse)
+async def upload_dataset(
+    file: Annotated[UploadFile, File()],
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+    description: Annotated[str, Header(alias="X-Description", max_length=500)] = "",
+) -> DatasetUploadResponse:
+    result = await ingest_dataset(file=file, session_id=session_id, description=description)
+    return DatasetUploadResponse(**result)
+
+
+@router.get("/datasets")
+async def get_datasets(
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> list[dict]:
+    return await list_datasets(session_id)
 
 
 @router.post("/research", response_model=ResearchResponse)
@@ -31,9 +52,15 @@ async def run_research(request: ResearchRequest) -> ResearchResponse:
         )
     except Exception as exc:
         logger.exception("multi_agent_research_failed task_id=%s", task_id)
+        if isinstance(exc, RateLimitError):
+            detail = groq_rate_limit_detail(exc)
+        elif isinstance(exc, APIError):
+            detail = groq_error_detail(exc)
+        else:
+            detail = "The research orchestration service is temporarily unavailable"
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The research orchestration service is temporarily unavailable",
+            detail=detail,
         ) from exc
     return ResearchResponse(
         task_id=task_id,

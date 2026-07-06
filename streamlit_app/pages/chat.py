@@ -19,6 +19,15 @@ if "uploaded_files" not in st.session_state:
 st.title("Adaptive RAG Chat")
 st.caption(f"Workspace: {st.session_state.session_id}")
 
+navigation_left, navigation_right = st.columns([1, 4])
+with navigation_left:
+    if st.button("Research workspace", use_container_width=True):
+        st.switch_page("pages/research.py")
+st.info(
+    "Chat selects one route per question. Use Research workspace when a task must combine "
+    "uploaded documents, web sources, or datasets."
+)
+
 with st.sidebar:
     st.header("Documents")
     uploaded_file = st.file_uploader("Upload PDF or TXT", type=["pdf", "txt"])
@@ -34,11 +43,11 @@ with st.sidebar:
                 description,
                 st.session_state.session_id,
             )
-        if result:
+        if not result.get("error"):
             st.session_state.uploaded_files[result["document_id"]] = result
             st.success(f"Indexed {result['filename']} ({result['chunks_indexed']} chunks)")
         else:
-            st.error("Document upload failed. Check the backend logs.")
+            st.error(result.get("error", "Document upload failed."))
 
     if st.session_state.uploaded_files:
         st.subheader("Indexed this session")

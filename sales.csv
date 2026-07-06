@@ -1,0 +1,7 @@
+region,quarter,revenue,cost
+North,Q1,120000,80000
+South,Q1,95000,70000
+North,Q2,150000,90000
+South,Q2,110000,75000
+North,Q3,130000,95000
+South,Q3,160000,100000

@@ -1,11 +1,14 @@
 """Agent specialized in current web research and source provenance."""
 
+import json
+
 from langchain_core.tools import tool
 from tavily import AsyncTavilyClient
 
 from src.agents.base import AgentContext, ToolCallingAgent
 from src.core.config import settings
 from src.db.evidence_store import add_evidence
+from src.models.agent import AgentResult
 
 
 class WebResearcherAgent(ToolCallingAgent):
@@ -19,6 +22,7 @@ class WebResearcherAgent(ToolCallingAgent):
         @tool
         async def search_web(query: str, max_results: int = 5) -> list[dict]:
             """Search the web and add result snippets with URLs to the shared evidence ledger."""
+            query = " ".join(query.split())[:400]
             client = AsyncTavilyClient(api_key=settings.tavily_api_key)
             response = await client.search(
                 query,
@@ -54,6 +58,29 @@ class WebResearcherAgent(ToolCallingAgent):
             return output
 
         return [search_web]
+
+    async def run(self, context: AgentContext) -> AgentResult:
+        """Collect web evidence directly to conserve Groq calls and tokens."""
+        try:
+            tool = self.build_tools(context)[0]
+            findings = await tool.ainvoke({"query": context.instruction, "max_results": 4})
+            summary = json.dumps(findings, default=str)[:5000]
+            return AgentResult(
+                agent=self.name,
+                instruction=context.instruction,
+                summary=summary or "No usable web-search results were found.",
+                evidence_ids=context.evidence_ids,
+                tool_calls=1,
+            )
+        except Exception as exc:
+            return AgentResult(
+                agent=self.name,
+                instruction=context.instruction,
+                summary="Web evidence collection failed.",
+                evidence_ids=context.evidence_ids,
+                tool_calls=1,
+                error=str(exc),
+            )
 
 
 web_researcher = WebResearcherAgent()

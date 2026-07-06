@@ -4,9 +4,11 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile, status
+from groq import APIError, AuthenticationError, RateLimitError
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.core.config import settings
+from src.core.integration_errors import groq_error_detail, groq_rate_limit_detail
 from src.memory.chat_history_mongo import ChatHistory
 from src.models.api import DeleteResponse, QueryResponse, UploadResponse
 from src.models.query_request import QueryRequest
@@ -34,9 +36,17 @@ async def rag_query(req: QueryRequest) -> QueryResponse:
         sources = result.get("sources", [])
     except Exception as exc:
         logger.exception("query_failed session_id=%s", req.session_id)
+        if isinstance(exc, AuthenticationError):
+            detail = "Groq rejected GROQ_API_KEY. Update .env and restart the API."
+        elif isinstance(exc, RateLimitError):
+            detail = groq_rate_limit_detail(exc)
+        elif isinstance(exc, APIError):
+            detail = groq_error_detail(exc)
+        else:
+            detail = "The answer service is temporarily unavailable"
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The answer service is temporarily unavailable",
+            detail=detail,
         ) from exc
 
     await history.add_messages([user_message, AIMessage(content=answer)])

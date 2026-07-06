@@ -1,6 +1,7 @@
 """Explicit specialist registry and dispatch."""
 
 from src.agents.base import AgentContext
+from src.agents.data_analyst import data_analyst
 from src.agents.document_investigator import document_investigator
 from src.agents.web_researcher import web_researcher
 from src.models.agent import AgentResult, AgentTask
@@ -8,6 +9,7 @@ from src.models.agent import AgentResult, AgentTask
 AGENTS = {
     "document_investigator": document_investigator,
     "web_researcher": web_researcher,
+    "data_analyst": data_analyst,
 }
 
 

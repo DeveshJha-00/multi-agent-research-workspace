@@ -1,9 +1,12 @@
 """Agent specialized in uploaded-document investigation."""
 
+import json
+
 from langchain_core.tools import tool
 
 from src.agents.base import AgentContext, ToolCallingAgent
 from src.db.evidence_store import add_evidence
+from src.models.agent import AgentResult
 from src.rag.retriever_setup import retrieve_documents
 
 
@@ -50,6 +53,29 @@ class DocumentInvestigatorAgent(ToolCallingAgent):
             return results
 
         return [search_uploaded_documents]
+
+    async def run(self, context: AgentContext) -> AgentResult:
+        """Collect document evidence directly to avoid unreliable free-model tool calls."""
+        try:
+            tool = self.build_tools(context)[0]
+            findings = await tool.ainvoke({"query": context.instruction, "limit": 5})
+            summary = json.dumps(findings, default=str)[:5000]
+            return AgentResult(
+                agent=self.name,
+                instruction=context.instruction,
+                summary=summary or "No relevant uploaded-document passages were found.",
+                evidence_ids=context.evidence_ids,
+                tool_calls=1,
+            )
+        except Exception as exc:
+            return AgentResult(
+                agent=self.name,
+                instruction=context.instruction,
+                summary="Document evidence collection failed.",
+                evidence_ids=context.evidence_ids,
+                tool_calls=1,
+                error=str(exc),
+            )
 
 
 document_investigator = DocumentInvestigatorAgent()

@@ -1,0 +1,4 @@
+The Acme employee remote-work policy permits employees to work remotely
+three days per week. Employees must use company-managed devices and
+multi-factor authentication. International remote work requires written
+manager approval.

@@ -31,6 +31,13 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: ${ENV_FILE:-.env}
+    environment:
+      HOME: /tmp
+      MPLCONFIGDIR: /tmp/matplotlib
+      FASTEMBED_CACHE_DIR: /models/fastembed
+      RERANKER_CACHE_DIR: /models/flashrank
+    volumes:
+      - model_cache:/models
     depends_on:
       mongo:
         condition: service_healthy
@@ -46,7 +53,7 @@ services:
     restart: unless-stopped
     environment:
       RAG_API_URL: http://api:8000
-      RAG_REQUEST_TIMEOUT_SECONDS: ${RAG_REQUEST_TIMEOUT_SECONDS:-120}
+      RAG_REQUEST_TIMEOUT_SECONDS: ${RAG_REQUEST_TIMEOUT_SECONDS:-300}
     depends_on:
       - api
     ports:
@@ -55,3 +62,4 @@ services:
 volumes:
   qdrant_data:
   mongo_data:
+  model_cache:

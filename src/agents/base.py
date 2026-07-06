@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from src.core.config import settings
-from src.llms.openai import get_llm
+from src.llms.provider import get_llm
 from src.models.agent import AgentResult
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class ToolCallingAgent:
         tool_map = {tool.name: tool for tool in tools}
         model = get_llm().bind_tools(tools)
         prior = "\n".join(
-            f"- {item.agent}: {item.summary[:1500]}" for item in context.prior_results[-6:]
+            f"- {item.agent}: {item.summary[:800]}" for item in context.prior_results[-3:]
         )
         messages = [
             SystemMessage(
@@ -93,7 +93,12 @@ class ToolCallingAgent:
                                 "agent_tool_failed agent=%s tool=%s", self.name, call["name"]
                             )
                             content = json.dumps({"error": str(exc)})
-                    messages.append(ToolMessage(content=content[:16000], tool_call_id=call["id"]))
+                    messages.append(
+                        ToolMessage(
+                            content=content[: settings.agent_tool_result_chars],
+                            tool_call_id=call["id"],
+                        )
+                    )
 
             return AgentResult(
                 agent=self.name,

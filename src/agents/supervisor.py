@@ -1,12 +1,60 @@
 """Supervisor planning agent."""
 
+import logging
+
 from langchain_core.prompts import ChatPromptTemplate
 
 from src.core.config import settings
-from src.llms.openai import get_llm
-from src.models.agent import ResearchPlan
+from src.llms.provider import get_structured_llm
+from src.models.agent import AgentTask, ResearchPlan
 
-PHASE_ONE_AGENTS = {"document_investigator", "web_researcher"}
+AVAILABLE_AGENTS = {"document_investigator", "web_researcher", "data_analyst"}
+logger = logging.getLogger(__name__)
+
+
+def _fallback_plan(objective: str, available_data: list[str]) -> ResearchPlan:
+    """Create a safe plan when the free model returns malformed structured output."""
+    declared = " ".join(available_data).lower()
+    objective_lower = objective.lower()
+    tasks = []
+    if "dataset" in declared or any(
+        term in objective_lower for term in ("csv", "dataset", "xlsx", "spreadsheet", "sales")
+    ):
+        tasks.append(
+            AgentTask(
+                agent="data_analyst",
+                instruction=f"Analyze the available workspace dataset for: {objective}",
+                rationale="The objective requires calculations from tabular data.",
+            )
+        )
+    if "uploaded document" in declared or "document" in objective_lower or "policy" in objective_lower:
+        tasks.append(
+            AgentTask(
+                agent="document_investigator",
+                instruction=f"Find relevant evidence in uploaded documents for: {objective}",
+                rationale="The objective refers to workspace documents.",
+            )
+        )
+    if any(
+        term in objective_lower
+        for term in ("current", "latest", "web", "external", "guidance", "compare")
+    ):
+        tasks.append(
+            AgentTask(
+                agent="web_researcher",
+                instruction=f"Find authoritative current web evidence for: {objective}",
+                rationale="The objective requires current or external evidence.",
+            )
+        )
+    if not tasks:
+        tasks.append(
+            AgentTask(
+                agent="web_researcher",
+                instruction=f"Research reliable external evidence for: {objective}",
+                rationale="Fallback research assignment.",
+            )
+        )
+    return ResearchPlan(objective=objective, tasks=tasks[: settings.supervisor_max_workers])
 
 
 async def create_research_plan(objective: str, available_data: list[str]) -> ResearchPlan:
@@ -17,7 +65,9 @@ async def create_research_plan(objective: str, available_data: list[str]) -> Res
                 "You supervise specialist agents. Break complex objectives into independent, bounded "
                 "assignments that can run in parallel. Available agents in this phase are "
                 "document_investigator for uploaded documents and web_researcher for external/current "
-                "information. Do not assign unavailable agents. Avoid duplicate work.",
+                "information, and data_analyst for uploaded CSV/JSON/Excel datasets. Do not assign "
+                "unavailable agents. Avoid duplicate work and use data_analyst only when tabular data "
+                "is relevant.",
             ),
             (
                 "human",
@@ -26,20 +76,29 @@ async def create_research_plan(objective: str, available_data: list[str]) -> Res
             ),
         ]
     )
-    planner = get_llm().with_structured_output(ResearchPlan)
-    plan = await (prompt | planner).ainvoke(
-        {
-            "objective": objective,
-            "available_data": ", ".join(available_data) or "No declared uploads",
-            "max_workers": settings.supervisor_max_workers,
-        }
-    )
-    plan.tasks = [task for task in plan.tasks if task.agent in PHASE_ONE_AGENTS][
-        : settings.supervisor_max_workers
-    ]
+    planner = get_structured_llm(ResearchPlan)
+    try:
+        plan = await (prompt | planner).ainvoke(
+            {
+                "objective": objective,
+                "available_data": ", ".join(available_data) or "No declared uploads",
+                "max_workers": settings.supervisor_max_workers,
+            }
+        )
+    except Exception:
+        logger.exception("supervisor_structured_output_failed; using deterministic plan")
+        plan = _fallback_plan(objective, available_data)
+    unique_tasks = []
+    assigned_agents = set()
+    for task in plan.tasks:
+        if task.agent not in AVAILABLE_AGENTS or task.agent in assigned_agents:
+            continue
+        unique_tasks.append(task)
+        assigned_agents.add(task.agent)
+        if len(unique_tasks) >= settings.supervisor_max_workers:
+            break
+    plan.tasks = unique_tasks
     if not plan.tasks:
-        from src.models.agent import AgentTask
-
         plan.tasks = [
             AgentTask(
                 agent="web_researcher",

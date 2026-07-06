@@ -12,8 +12,7 @@ from tavily import AsyncTavilyClient
 
 from src.config.settings import Config
 from src.core.config import settings
-from src.llms.openai import get_llm
-from src.models.grade import RerankResult
+from src.llms.provider import get_llm, get_structured_llm, rerank_passages
 from src.models.route_identifier import RouteIdentifier
 from src.models.state import State
 from src.models.verification_result import VerificationResult
@@ -63,7 +62,7 @@ async def query_classifier(state: State) -> dict:
     question = state["messages"][-1].content
     documents = await retrieve_documents(question, session_id=state["session_id"])
     prompt = PromptTemplate.from_template(config.prompt("classify_prompt"))
-    classifier = get_llm().with_structured_output(RouteIdentifier)
+    classifier = get_structured_llm(RouteIdentifier)
     result = await (prompt | classifier).ainvoke(
         {
             "question": question,
@@ -104,32 +103,21 @@ async def rerank(state: State) -> dict:
     if not candidates:
         return {"reranked_documents": []}
 
-    prompt = PromptTemplate.from_template(config.prompt("rerank_prompt"))
-    reranker = get_llm().with_structured_output(RerankResult)
     try:
-        rerank_context = "\n\n".join(
-            f"[{index}] {doc.page_content.strip()}" for index, doc in enumerate(candidates)
-        )
-        result = await (prompt | reranker).ainvoke(
-            {
-                "question": state["latest_query"],
-                "context": rerank_context[:12000],
-            }
+        results = await rerank_passages(
+            state["latest_query"], [doc.page_content for doc in candidates]
         )
         ranked = []
-        seen = set()
-        for item in sorted(result.rankings, key=lambda value: value.relevance_score, reverse=True):
-            index = item.document_index
-            if index in seen or index >= len(candidates):
+        for index, score in results:
+            if index < 0 or index >= len(candidates):
                 continue
-            seen.add(index)
             doc = candidates[index]
-            doc.metadata["rerank_score"] = item.relevance_score
+            doc.metadata["rerank_score"] = score
             ranked.append(doc)
             if len(ranked) >= settings.rerank_top_n:
                 break
     except Exception:
-        logger.exception("LLM reranking failed; using vector-score order")
+        logger.exception("Local cross-encoder reranking failed; using vector-score order")
         ranked = sorted(
             candidates,
             key=lambda doc: float(doc.metadata.get("vector_score", 0.0)),
@@ -209,7 +197,7 @@ async def generate(state: State) -> dict:
 
 async def verify(state: State) -> dict:
     prompt = PromptTemplate.from_template(config.prompt("verify_prompt"))
-    verifier = get_llm().with_structured_output(VerificationResult)
+    verifier = get_structured_llm(VerificationResult)
     result = await (prompt | verifier).ainvoke(
         {
             "question": state["messages"][-1].content,
