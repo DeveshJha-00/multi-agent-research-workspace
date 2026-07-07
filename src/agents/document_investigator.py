@@ -5,6 +5,7 @@ import json
 from langchain_core.tools import tool
 
 from src.agents.base import AgentContext, ToolCallingAgent
+from src.core.idempotency import operation_key
 from src.db.evidence_store import add_evidence
 from src.models.agent import AgentResult
 from src.rag.retriever_setup import retrieve_documents
@@ -39,6 +40,13 @@ class DocumentInvestigatorAgent(ToolCallingAgent):
                     page=metadata.get("page"),
                     confidence=float(metadata.get("vector_score", 0.7)),
                     metadata={"query": query},
+                    operation_key=operation_key(
+                        "document",
+                        query,
+                        metadata.get("document_id"),
+                        metadata.get("page"),
+                        document.page_content,
+                    ),
                 )
                 context.evidence_ids.append(evidence_id)
                 results.append(

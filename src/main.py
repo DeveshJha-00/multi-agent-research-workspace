@@ -15,9 +15,12 @@ from src.core.config import settings
 from src.core.integration_errors import groq_rate_limit_detail
 from src.core.logger import configure_logging, logger
 from src.db.artifact_store import initialize_artifact_store
+from src.db.checkpoint_store import initialize_checkpoint_store
 from src.db.dataset_store import initialize_dataset_store
 from src.db.evidence_store import initialize_evidence_store
 from src.db.mongo_client import close_mongodb, initialize_mongodb, mongodb_ready
+from src.db.research_job_store import initialize_research_job_store
+from src.orchestration.job_runner import research_job_runner
 from src.rag.retriever_setup import close_qdrant, initialize_qdrant, qdrant_ready
 
 
@@ -30,10 +33,16 @@ async def lifespan(app: FastAPI):
         logger.error("External AI configuration incomplete: %s", exc)
     await asyncio.gather(initialize_mongodb(), initialize_qdrant())
     await asyncio.gather(
-        initialize_evidence_store(), initialize_artifact_store(), initialize_dataset_store()
+        initialize_evidence_store(),
+        initialize_artifact_store(),
+        initialize_dataset_store(),
+        initialize_checkpoint_store(),
+        initialize_research_job_store(),
     )
+    research_job_runner.start()
     logger.info("Application dependencies initialized")
     yield
+    await research_job_runner.stop()
     await close_qdrant()
     close_mongodb()
 
@@ -48,7 +57,13 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Content-Type", "X-Description", "X-Session-ID"],
+    allow_headers=[
+        "Content-Type",
+        "Idempotency-Key",
+        "Last-Event-ID",
+        "X-Description",
+        "X-Session-ID",
+    ],
 )
 app.include_router(router)
 app.include_router(agent_router)

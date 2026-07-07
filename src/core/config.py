@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     rerank_relevance_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     max_retrieval_retries: int = Field(default=1, ge=0, le=3)
     graph_recursion_limit: int = Field(default=15, ge=5, le=50)
+    research_worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
+    research_job_lease_seconds: int = Field(default=60, ge=15, le=600)
+    research_job_max_attempts: int = Field(default=3, ge=1, le=10)
+    research_event_poll_seconds: float = Field(default=0.5, ge=0.1, le=10.0)
 
     chunk_size: int = Field(default=1000, ge=200, le=8000)
     chunk_overlap: int = Field(default=150, ge=0, le=2000)

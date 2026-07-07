@@ -9,6 +9,7 @@ from langchain_core.tools import tool
 from matplotlib.figure import Figure
 
 from src.agents.base import AgentContext, ToolCallingAgent
+from src.core.idempotency import operation_key
 from src.db.artifact_store import save_artifact
 from src.db.dataset_store import list_datasets, load_dataframe
 from src.db.evidence_store import add_evidence
@@ -37,6 +38,7 @@ class DataAnalystAgent(ToolCallingAgent):
                 source=source,
                 confidence=0.95,
                 metadata=metadata,
+                operation_key=operation_key("data", source, metadata, content),
             )
             context.evidence_ids.append(evidence_id)
             return evidence_id
@@ -156,6 +158,7 @@ class DataAnalystAgent(ToolCallingAgent):
                 name="analysis-chart.png",
                 media_type="image/png",
                 content=buffer.getvalue(),
+                operation_key=operation_key("chart", dataset_id, chart_type, x, y, title),
             )
             context.artifact_ids.append(artifact_id)
             return {"artifact_id": artifact_id, "name": "analysis-chart.png"}
@@ -196,12 +199,13 @@ class DataAnalystAgent(ToolCallingAgent):
         revenue_column = lower_columns.get("revenue")
         cost_column = lower_columns.get("cost")
         if revenue_column and cost_column:
-            working["profit"] = (
-                pd.to_numeric(working[revenue_column], errors="coerce")
-                - pd.to_numeric(working[cost_column], errors="coerce")
-            )
+            working["profit"] = pd.to_numeric(
+                working[revenue_column], errors="coerce"
+            ) - pd.to_numeric(working[cost_column], errors="coerce")
 
-        numeric_columns = [str(column) for column in working.select_dtypes(include="number").columns]
+        numeric_columns = [
+            str(column) for column in working.select_dtypes(include="number").columns
+        ]
         categorical_columns = [
             str(column)
             for column in working.columns
@@ -219,7 +223,7 @@ class DataAnalystAgent(ToolCallingAgent):
         }
         grouped_results: dict[str, dict] = {}
         performers: dict[str, dict] = {}
-        for group_by in (categorical_columns[:2] if numeric_columns else []):
+        for group_by in categorical_columns[:2] if numeric_columns else []:
             grouped = (
                 working.groupby(group_by, dropna=False)[numeric_columns]
                 .sum(numeric_only=True)
@@ -261,6 +265,9 @@ class DataAnalystAgent(ToolCallingAgent):
             source=metadata["filename"],
             confidence=0.98,
             metadata={"operation": "automatic_baseline_analysis"},
+            operation_key=operation_key(
+                "automatic_analysis", selected["dataset_id"], context.instruction
+            ),
         )
         context.evidence_ids.append(evidence_id)
 
@@ -290,6 +297,9 @@ class DataAnalystAgent(ToolCallingAgent):
                 name="analysis-chart.png",
                 media_type="image/png",
                 content=buffer.getvalue(),
+                operation_key=operation_key(
+                    "automatic_chart", selected["dataset_id"], group_by, metric
+                ),
             )
             context.artifact_ids.append(artifact_id)
             tool_calls += 1

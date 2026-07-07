@@ -7,6 +7,7 @@ from tavily import AsyncTavilyClient
 
 from src.agents.base import AgentContext, ToolCallingAgent
 from src.core.config import settings
+from src.core.idempotency import operation_key
 from src.db.evidence_store import add_evidence
 from src.models.agent import AgentResult
 
@@ -44,6 +45,7 @@ class WebResearcherAgent(ToolCallingAgent):
                     url=item.get("url"),
                     confidence=float(item.get("score", 0.7)),
                     metadata={"query": query},
+                    operation_key=operation_key("web", query, item.get("url"), content),
                 )
                 context.evidence_ids.append(evidence_id)
                 output.append(

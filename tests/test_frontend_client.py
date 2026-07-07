@@ -35,6 +35,7 @@ def test_research_client_sends_workspace_and_available_data(monkeypatch):
     assert result["task_id"] == "task-1"
     assert captured["json"]["session_id"] == "session-123"
     assert captured["json"]["available_data"] == ["Dataset ID dataset-1"]
+    assert captured["headers"]["Idempotency-Key"]
 
 
 def test_artifact_download_returns_content_and_media_type(monkeypatch):

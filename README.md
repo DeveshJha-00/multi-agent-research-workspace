@@ -41,7 +41,21 @@ The Research workspace runs a supervisor-worker LangGraph:
 - `deliverable_builder`: creates and stores a Markdown research report.
 
 Every specialist records evidence IDs and source metadata in a shared MongoDB ledger. Reports and PNG
-charts are stored as artifacts and can be previewed or downloaded from the UI.
+charts are stored as artifacts and can be previewed or downloaded from the UI. Research runs are
+asynchronous durable jobs: the API immediately returns a task ID, LangGraph checkpoints after graph
+steps, and the UI streams persisted activity events while work continues in the background.
+
+Durability includes:
+
+- request idempotency through the `Idempotency-Key` header;
+- retry-safe evidence and artifact writes with deterministic operation keys;
+- MongoDB-backed LangGraph checkpoints and pending writes;
+- worker leases and stale-job recovery after an unexpected process shutdown;
+- reconnectable server-sent events (SSE), cancellation, explicit retry, and job history.
+
+Checkpointing resumes at graph boundaries, not in the middle of an external model/search call. If a
+process stops during a node, that node may run again after its lease expires, while its persistent
+side effects remain deduplicated.
 
 Document and web evidence collection is deterministic to avoid unreliable free-model tool calls.
 Data-only reports are assembled directly from computed results so the model cannot alter numeric
@@ -78,7 +92,12 @@ flowchart LR
     WEB --> GENERATE
     GENERATE --> VERIFY[Faithfulness verification]
 
-    API --> RESEARCH[Research orchestration graph]
+    API --> JOBS[(Durable research jobs)]
+    JOBS --> WORKER[Leased async worker]
+    WORKER --> RESEARCH[Research orchestration graph]
+    RESEARCH --> CHECKPOINTS[(LangGraph checkpoints)]
+    RESEARCH --> EVENTS[(Persisted SSE events)]
+    EVENTS --> UI
     RESEARCH --> SUPERVISOR[Supervisor]
     SUPERVISOR --> DOC[Document investigator]
     SUPERVISOR --> WEBAGENT[Web researcher]
@@ -118,12 +137,15 @@ active backend is Qdrant; the old in-process FAISS implementation has been remov
 
 ### Research flow
 
-1. The UI sends an objective, workspace ID, and descriptions of available data.
-2. The supervisor selects distinct relevant specialists.
-3. Specialists run in parallel where possible and write evidence to MongoDB.
-4. The critic evaluates coverage and may request one deduplicated revision round.
-5. The deliverable builder writes a report; data-only deliverables remain deterministic.
-6. The UI displays audit results, specialist activity, chart previews, and downloads.
+1. The UI submits an objective with an idempotency key; FastAPI persists a queued job and returns
+   HTTP `202` with its task ID.
+2. A background worker atomically leases the job. A stale lease makes interrupted work reclaimable.
+3. The supervisor selects distinct relevant specialists.
+4. Specialists run in parallel where possible, write idempotent evidence, and emit progress events.
+5. LangGraph stores checkpoints and pending writes in MongoDB after graph steps.
+6. The critic evaluates coverage and may request one deduplicated revision round.
+7. The deliverable builder writes retry-safe artifacts; data-only deliverables remain deterministic.
+8. The result is persisted on the job. The UI receives live SSE updates and can later reconnect by ID.
 
 ## Technology choices
 
@@ -132,7 +154,7 @@ active backend is Qdrant; the old in-process FAISS implementation has been remov
 | Python 3.12 | Runtime | Strong AI/data ecosystem and async support |
 | FastAPI | Backend API | Typed validation, async endpoints, automatic OpenAPI docs |
 | Streamlit | Demo UI | Fast iteration for chat, uploads, agent activity, and artifacts |
-| LangGraph | Workflows | Explicit state, branching, bounded retries, and worker dispatch |
+| LangGraph | Workflows | Explicit state, branching, parallel dispatch, and resumable checkpoints |
 | LangChain Core/Groq | Model adapters | Structured output, prompts, messages, and tool interfaces |
 | Groq `openai/gpt-oss-20b` | Chat inference | Accessible free-tier inference for an educational demo |
 | FastEmbed `BAAI/bge-small-en-v1.5` | Embeddings | Free local ONNX inference with small 384-dimension vectors |
@@ -154,6 +176,10 @@ Important trade-offs:
 - One shared Qdrant collection is simpler than a collection per workspace, but correct payload filters
   are essential.
 - Single-route Chat is easy to understand; the Research workspace handles hybrid document/web/data tasks.
+- MongoDB polling and leases keep the demo deployment simple and durable without Redis/Celery; a
+  dedicated queue would offer higher throughput and scheduling controls at larger scale.
+- SSE is one-way and ideal for activity feeds; WebSockets would be preferable for highly interactive,
+  bidirectional control.
 
 ## Project structure
 
@@ -174,7 +200,7 @@ Important trade-offs:
 |   |-- config/                  Prompt templates
 |   |-- core/                    Settings, logging, prompt budgets, integration errors
 |   |-- data/                    Dataset parsing and validation
-|   |-- db/                      MongoDB datasets, evidence, artifacts, client
+|   |-- db/                      MongoDB jobs, checkpoints, datasets, evidence, artifacts
 |   |-- llms/                    Groq, FastEmbed, and FlashRank factories
 |   |-- memory/                  MongoDB chat history
 |   |-- models/                  Pydantic and LangGraph state models
@@ -270,6 +296,11 @@ FastEmbed vectors at an older 1536-dimensional collection.
 | `AGENT_MAX_ITERATIONS` | `3` | Generic tool-agent loop bound |
 | `SUPERVISOR_MAX_WORKERS` | `2` | Initial distinct specialists |
 | `AGENT_MAX_REVISIONS` | `1` | Critic revision rounds |
+| `GRAPH_RECURSION_LIMIT` | `15` | Maximum graph supersteps per attempt |
+| `RESEARCH_WORKER_POLL_SECONDS` | `1.0` | Delay while no durable job is available |
+| `RESEARCH_JOB_LEASE_SECONDS` | `60` | Worker ownership window before crash recovery |
+| `RESEARCH_JOB_MAX_ATTEMPTS` | `3` | Maximum automatic lease claims before manual retry |
+| `RESEARCH_EVENT_POLL_SECONDS` | `0.5` | MongoDB-to-SSE progress polling interval |
 | `AGENT_TOOL_RESULT_CHARS` | `8000` | Tool-message context cap |
 | `CRITIC_RESULTS_CHARS` | `3000` | Specialist-summary budget |
 | `CRITIC_EVIDENCE_CHARS` | `6000` | Evidence context budget |
@@ -343,8 +374,10 @@ pause between model-heavy tests because provider free-tier limits are account-de
    > cybersecurity guidance. Identify strengths, gaps, and recommended changes. Produce a sourced
    > report.
 
-   Expect both `document_investigator` and `web_researcher`, an evidence audit, and a non-empty report.
-   Research results do not display a single Chat route label.
+   Expect live planning/specialist/critique/report activity, both `document_investigator` and
+   `web_researcher`, an evidence audit, and a non-empty report. Research results do not display a
+   single Chat route label. Refreshing the page does not cancel the job; use **Durable job history**
+   to reconnect.
 
 10. Run dataset research:
 
@@ -399,7 +432,14 @@ streamlit run streamlit_app/home.py --server.port 8501
 | `DELETE` | `/rag/history` | Clear workspace chat history |
 | `POST` | `/agents/datasets/upload` | Store CSV/JSON/XLSX |
 | `GET` | `/agents/datasets` | List workspace datasets |
-| `POST` | `/agents/research` | Run the multi-agent research graph |
+| `POST` | `/agents/research` | Queue research; returns HTTP 202 and a task ID |
+| `GET` | `/agents/tasks` | List durable jobs for a workspace |
+| `GET` | `/agents/tasks/{task_id}` | Read job status and progress |
+| `GET` | `/agents/tasks/{task_id}/events` | Read persisted activity after a sequence number |
+| `GET` | `/agents/tasks/{task_id}/events/stream` | Stream reconnectable activity with SSE |
+| `GET` | `/agents/tasks/{task_id}/result` | Read a completed research result |
+| `DELETE` | `/agents/tasks/{task_id}` | Request cooperative cancellation |
+| `POST` | `/agents/tasks/{task_id}/retry` | Retry failed or cancelled work from its checkpoint |
 | `GET` | `/agents/artifacts/{artifact_id}` | Download a workspace artifact |
 
 ### Query example
@@ -420,18 +460,38 @@ Invoke-RestMethod `
 ### Research example
 
 ```powershell
+$session = "demo-session-001"
+$idempotencyKey = [guid]::NewGuid().ToString()
 $body = @{
     objective = "Compare the uploaded policy with current guidance."
-    session_id = "demo-session-001"
+    session_id = $session
     available_data = @("Uploaded document: sample-policy.txt")
 } | ConvertTo-Json -Depth 5
 
-Invoke-RestMethod `
+$job = Invoke-RestMethod `
     -Method Post `
     -Uri http://localhost:8000/agents/research `
     -ContentType application/json `
+    -Headers @{ "Idempotency-Key" = $idempotencyKey } `
     -Body $body
+
+do {
+    Start-Sleep -Seconds 2
+    $status = Invoke-RestMethod `
+        -Uri "http://localhost:8000/agents/tasks/$($job.task_id)" `
+        -Headers @{ "X-Session-ID" = $session }
+    "$($status.status) - $($status.stage) - $($status.progress)%"
+} while ($status.status -in @("queued", "running", "cancel_requested"))
+
+if ($status.status -eq "completed") {
+    Invoke-RestMethod `
+        -Uri "http://localhost:8000/agents/tasks/$($job.task_id)/result" `
+        -Headers @{ "X-Session-ID" = $session }
+}
 ```
+
+Repeating the submission with the same idempotency key and identical body returns the same task ID.
+Reusing it with a different body returns HTTP `409`.
 
 Interactive request schemas and responses are available at `/docs`.
 
@@ -443,8 +503,14 @@ Docker volumes:
 - `qdrant_data`: document vectors and payloads.
 - `model_cache`: FastEmbed and FlashRank model files.
 
-MongoDB collections include chat history, datasets, dataset batches, evidence, and artifacts. Qdrant
-uses one shared collection filtered by `session_id` and `document_id`.
+MongoDB collections include chat history, datasets, dataset batches, evidence, artifacts,
+`research_jobs`, `research_events`, `langgraph_checkpoints`, and `langgraph_writes`. Job results,
+events, checkpoints, and side effects survive ordinary refreshes and process restarts. Qdrant uses
+one shared collection filtered by `session_id` and `document_id`.
+
+The API process also runs the lightweight leased worker. Keep `WEB_CONCURRENCY=1` for this demo.
+Leases still prevent duplicate ownership if more than one process is accidentally started, but this
+is not designed as a high-throughput distributed queue.
 
 Workspace IDs prevent accidental cross-workspace retrieval in normal application paths, but without
 authentication anyone who knows an ID could use it. Add authentication and authorization before using
@@ -534,9 +600,9 @@ ruff check src tests streamlit_app
 ruff format --check src tests streamlit_app
 ```
 
-The project currently has 42 passing tests covering configuration, upload validation, Qdrant
-isolation, routing, model adapters, prompt budgets, frontend error handling, specialist orchestration,
-data analysis, and non-empty deliverables.
+The test suite covers configuration, upload validation, Qdrant isolation, routing, model adapters,
+prompt budgets, frontend error handling, specialist orchestration, durability contracts, data
+analysis, and non-empty deliverables.
 
 Development conventions remain in [CODE_STYLE_GUIDE.md](CODE_STYLE_GUIDE.md).
 
@@ -544,7 +610,9 @@ Development conventions remain in [CODE_STYLE_GUIDE.md](CODE_STYLE_GUIDE.md).
 
 - Authentication and authorization are deliberately deferred.
 - Chat uses a single selected route; Research performs hybrid work.
-- The research endpoint is synchronous and intended for demo-sized tasks.
+- Research is asynchronous, checkpointed, leased, and intended for demo-sized tasks.
+- Cancellation is cooperative at graph-node boundaries; in-flight provider calls are not forcibly
+  terminated.
 - Agent and prompt budgets prioritize Groq free-tier reliability over maximum parallelism.
 - Local Qdrant and MongoDB ports are not published outside the Compose network.
 - No load balancer or multi-node infrastructure is required for the intended educational deployment.

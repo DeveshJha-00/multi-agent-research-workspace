@@ -4,6 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from src.agents.base import AgentContext
 from src.core.config import settings
+from src.core.idempotency import operation_key
 from src.core.prompt_budget import compact_evidence, compact_results
 from src.db.artifact_store import list_artifacts, save_artifact
 from src.db.evidence_store import get_evidence
@@ -111,13 +112,16 @@ class DeliverableBuilderAgent:
             name="research-report.md",
             media_type="text/markdown",
             content=markdown.encode("utf-8")[:1_000_000],
+            operation_key=operation_key("final_report", context.objective),
         )
         context.artifact_ids.append(artifact_id)
         result = AgentResult(
             agent=self.name,
             instruction=context.instruction,
             summary=markdown,
-            evidence_ids=[str(item.get("evidence_id")) for item in evidence if item.get("evidence_id")],
+            evidence_ids=[
+                str(item.get("evidence_id")) for item in evidence if item.get("evidence_id")
+            ],
             tool_calls=0,
         )
         records = await list_artifacts(context.task_id)

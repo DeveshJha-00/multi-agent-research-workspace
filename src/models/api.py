@@ -1,6 +1,7 @@
 """Public API response models."""
 
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -44,6 +45,47 @@ class ResearchResponse(BaseModel):
     worker_results: list[AgentResult]
     critique: Critique
     artifacts: list[ArtifactRecord]
+
+
+ResearchJobStatus = Literal[
+    "queued",
+    "running",
+    "cancel_requested",
+    "cancelled",
+    "completed",
+    "failed",
+]
+
+
+class ResearchJobCreated(BaseModel):
+    task_id: str
+    status: ResearchJobStatus
+    reused: bool = False
+
+
+class ResearchJobStatusResponse(BaseModel):
+    task_id: str
+    objective: str
+    status: ResearchJobStatus
+    stage: str
+    progress: int = Field(ge=0, le=100)
+    attempts: int
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class ResearchEventResponse(BaseModel):
+    task_id: str
+    sequence: int
+    event: str
+    stage: str
+    progress: int = Field(ge=0, le=100)
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
 
 
 class DatasetUploadResponse(BaseModel):

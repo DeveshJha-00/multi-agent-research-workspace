@@ -1,13 +1,21 @@
-"""Browser UI for multi-agent research, datasets, and generated artifacts."""
+"""Browser UI for durable multi-agent research and live progress."""
+
+from uuid import uuid4
 
 import streamlit as st
 
 from streamlit_app.utils.api_client import (
+    cancel_research_job,
+    create_research_job,
     dataset_upload,
     document_upload_rag,
     download_artifact,
     get_datasets,
-    run_research,
+    get_research_job,
+    get_research_jobs,
+    get_research_result,
+    retry_research_job,
+    stream_research_events,
 )
 
 st.set_page_config(page_title="Agentic Research", page_icon="🧭", layout="wide")
@@ -21,8 +29,43 @@ st.session_state.setdefault("research_runs", [])
 st.session_state.setdefault("uploaded_files", {})
 st.session_state.setdefault("uploaded_datasets", {})
 
+
+def watch_job(task_id: str) -> None:
+    """Render persisted events live, then load the completed durable result."""
+    last_sequence = 0
+    with st.status(f"Watching research job {task_id[:8]}…", expanded=True) as activity:
+        for event in stream_research_events(task_id, st.session_state.session_id, last_sequence):
+            if event.get("error"):
+                st.warning(event["error"])
+                break
+            last_sequence = event["sequence"]
+            st.write(f"**{event['stage'].replace('_', ' ').title()}** — {event['message']}")
+            activity.update(label=f"{event['progress']}% · {event['message']}")
+
+        job = get_research_job(task_id, st.session_state.session_id)
+        if job.get("status") == "completed":
+            result = get_research_result(task_id, st.session_state.session_id)
+            if not result.get("error"):
+                known = {item["task_id"] for item in st.session_state.research_runs}
+                if task_id not in known:
+                    st.session_state.research_runs.insert(0, result)
+                activity.update(label="Research complete", state="complete")
+                return
+        if job.get("status") == "cancelled":
+            activity.update(label="Research cancelled", state="error")
+        elif job.get("status") == "failed":
+            activity.update(label="Research failed", state="error")
+            st.error(job.get("error", "The job failed."))
+        elif job.get("error"):
+            activity.update(label="Unable to read job status", state="error")
+        else:
+            activity.update(label=f"Connection closed · job is {job.get('status')}")
+
+
 st.title("Multi-agent research")
-st.caption(f"Workspace: {st.session_state.session_id}")
+st.caption(
+    f"Workspace: {st.session_state.session_id} · jobs survive refreshes and service restarts"
+)
 if st.button("Back to chat"):
     st.switch_page("pages/chat.py")
 
@@ -85,16 +128,35 @@ objective = st.text_area(
     ),
 )
 
-if st.button("Run specialist team", type="primary", disabled=len(objective.strip()) < 10):
-    with st.status("Specialist team is working...", expanded=True) as status:
-        st.write("Supervisor is planning and delegating work.")
-        result = run_research(objective.strip(), st.session_state.session_id, available_data)
-        if result.get("error"):
-            status.update(label="Research failed", state="error")
-            st.error(result["error"])
-        else:
-            status.update(label="Research complete", state="complete")
-            st.session_state.research_runs.insert(0, result)
+if st.button("Start specialist team", type="primary", disabled=len(objective.strip()) < 10):
+    created = create_research_job(
+        objective.strip(),
+        st.session_state.session_id,
+        available_data,
+        idempotency_key=str(uuid4()),
+    )
+    if created.get("error"):
+        st.error(created["error"])
+    else:
+        watch_job(created["task_id"])
+
+jobs = get_research_jobs(st.session_state.session_id)
+if jobs:
+    with st.expander("Durable job history", expanded=False):
+        for job in jobs:
+            columns = st.columns([5, 2, 1, 1])
+            columns[0].write(f"{job['objective'][:90]} · `{job['task_id'][:8]}`")
+            columns[1].write(f"{job['status']} · {job['progress']}%")
+            if columns[2].button("Watch", key=f"watch-{job['task_id']}"):
+                watch_job(job["task_id"])
+            if job["status"] in {"queued", "running", "cancel_requested"}:
+                if columns[3].button("Cancel", key=f"cancel-{job['task_id']}"):
+                    cancel_research_job(job["task_id"], st.session_state.session_id)
+                    st.rerun()
+            elif job["status"] in {"failed", "cancelled"}:
+                if columns[3].button("Retry", key=f"retry-{job['task_id']}"):
+                    retry_research_job(job["task_id"], st.session_state.session_id)
+                    st.rerun()
 
 for run_index, run in enumerate(st.session_state.research_runs):
     st.divider()

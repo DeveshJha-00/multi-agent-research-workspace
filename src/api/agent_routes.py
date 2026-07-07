@@ -1,21 +1,37 @@
-"""Synchronous Phase-1 multi-agent research API."""
+"""Async durable multi-agent research API."""
 
-import logging
+import asyncio
+import json
 from typing import Annotated
-from uuid import uuid4
 
-from fastapi import APIRouter, File, Header, HTTPException, Response, UploadFile, status
-from groq import APIError, RateLimitError
+from fastapi import APIRouter, File, Header, HTTPException, Request, Response, UploadFile, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 
 from src.core.config import settings
-from src.core.integration_errors import groq_error_detail, groq_rate_limit_detail
 from src.data.ingestion import ingest_dataset
 from src.db.artifact_store import get_artifact
 from src.db.dataset_store import list_datasets
-from src.models.api import DatasetUploadResponse, ResearchRequest, ResearchResponse
-from src.orchestration.research_graph import research_orchestrator
+from src.db.research_job_store import (
+    TERMINAL_STATUSES,
+    IdempotencyConflictError,
+    append_event,
+    create_research_job,
+    get_research_events,
+    get_research_job,
+    list_research_jobs,
+    request_job_cancellation,
+    retry_job,
+)
+from src.models.api import (
+    DatasetUploadResponse,
+    ResearchEventResponse,
+    ResearchJobCreated,
+    ResearchJobStatusResponse,
+    ResearchRequest,
+    ResearchResponse,
+)
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["multi-agent"])
 
 
@@ -36,39 +52,153 @@ async def get_datasets(
     return await list_datasets(session_id)
 
 
-@router.post("/research", response_model=ResearchResponse)
-async def run_research(request: ResearchRequest) -> ResearchResponse:
-    task_id = str(uuid4())
+@router.post("/research", response_model=ResearchJobCreated, status_code=status.HTTP_202_ACCEPTED)
+async def run_research(
+    request: ResearchRequest,
+    idempotency_key: Annotated[
+        str | None, Header(alias="Idempotency-Key", min_length=1, max_length=200)
+    ] = None,
+) -> ResearchJobCreated:
     try:
-        result = await research_orchestrator.ainvoke(
-            {
-                "task_id": task_id,
-                "session_id": request.session_id,
-                "objective": request.objective,
-                "available_data": request.available_data,
-                "worker_results": [],
-            },
-            config={"recursion_limit": settings.graph_recursion_limit},
+        job, reused = await create_research_job(
+            session_id=request.session_id,
+            objective=request.objective,
+            available_data=request.available_data,
+            idempotency_key=idempotency_key,
         )
-    except Exception as exc:
-        logger.exception("multi_agent_research_failed task_id=%s", task_id)
-        if isinstance(exc, RateLimitError):
-            detail = groq_rate_limit_detail(exc)
-        elif isinstance(exc, APIError):
-            detail = groq_error_detail(exc)
-        else:
-            detail = "The research orchestration service is temporarily unavailable"
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=detail,
-        ) from exc
-    return ResearchResponse(
-        task_id=task_id,
-        content=result["final_answer"],
-        worker_results=result.get("worker_results", []),
-        critique=result["critique"],
-        artifacts=result.get("artifacts", []),
+    except IdempotencyConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return ResearchJobCreated(task_id=job["task_id"], status=job["status"], reused=reused)
+
+
+async def _require_job(task_id: str, session_id: str) -> dict:
+    job = await get_research_job(task_id, session_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Research job not found")
+    return job
+
+
+def _status_response(job: dict) -> ResearchJobStatusResponse:
+    return ResearchJobStatusResponse(**job)
+
+
+@router.get("/tasks", response_model=list[ResearchJobStatusResponse])
+async def get_tasks(
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> list[ResearchJobStatusResponse]:
+    return [_status_response(job) for job in await list_research_jobs(session_id)]
+
+
+@router.get("/tasks/{task_id}", response_model=ResearchJobStatusResponse)
+async def get_task(
+    task_id: str,
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> ResearchJobStatusResponse:
+    return _status_response(await _require_job(task_id, session_id))
+
+
+@router.get("/tasks/{task_id}/events", response_model=list[ResearchEventResponse])
+async def get_task_events(
+    task_id: str,
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+    after: int = 0,
+) -> list[ResearchEventResponse]:
+    await _require_job(task_id, session_id)
+    return [ResearchEventResponse(**item) for item in await get_research_events(task_id, after)]
+
+
+@router.get("/tasks/{task_id}/events/stream")
+async def stream_task_events(
+    task_id: str,
+    request: Request,
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+    after: int = 0,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    await _require_job(task_id, session_id)
+
+    async def generate():
+        try:
+            header_sequence = int(last_event_id or 0)
+        except ValueError:
+            header_sequence = 0
+        sequence = max(0, after, header_sequence)
+        idle_ticks = 0
+        while not await request.is_disconnected():
+            batch = await get_research_events(task_id, sequence)
+            for item in batch:
+                sequence = item["sequence"]
+                payload = json.dumps(jsonable_encoder(item), separators=(",", ":"))
+                yield f"id: {sequence}\nevent: {item['event']}\ndata: {payload}\n\n"
+            job = await get_research_job(task_id, session_id)
+            if job is None or (job["status"] in TERMINAL_STATUSES and not batch):
+                break
+            idle_ticks += 1
+            if idle_ticks % 30 == 0:
+                yield ": keep-alive\n\n"
+            await asyncio.sleep(settings.research_event_poll_seconds)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/tasks/{task_id}/result", response_model=ResearchResponse)
+async def get_task_result(
+    task_id: str,
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> ResearchResponse:
+    job = await _require_job(task_id, session_id)
+    if job["status"] != "completed" or not job.get("result"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Research result is not ready; current status is {job['status']}",
+        )
+    return ResearchResponse(**job["result"])
+
+
+@router.delete("/tasks/{task_id}", response_model=ResearchJobStatusResponse)
+async def cancel_task(
+    task_id: str,
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> ResearchJobStatusResponse:
+    existing = await _require_job(task_id, session_id)
+    job = await request_job_cancellation(task_id, session_id)
+    if job is None:
+        job = existing
+    else:
+        await append_event(
+            task_id,
+            event="cancellation_requested",
+            stage=job["stage"],
+            progress=job["progress"],
+            message="Cancellation requested",
+        )
+    return _status_response(job)
+
+
+@router.post("/tasks/{task_id}/retry", response_model=ResearchJobStatusResponse)
+async def retry_task(
+    task_id: str,
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> ResearchJobStatusResponse:
+    await _require_job(task_id, session_id)
+    job = await retry_job(task_id, session_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed or cancelled research jobs can be retried",
+        )
+    await append_event(
+        task_id,
+        event="job_requeued",
+        stage="queued",
+        progress=job["progress"],
+        message="Research job queued for retry",
+    )
+    return _status_response(job)
 
 
 @router.get("/artifacts/{artifact_id}")
