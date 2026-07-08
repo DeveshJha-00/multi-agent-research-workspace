@@ -29,10 +29,13 @@ class EvidenceCriticAgent:
     ) -> Critique:
         del session_id  # Evidence is already isolated by the task created for this request.
         evidence = await get_evidence(task_id, limit=30)
-        data_only_success = bool(results) and all(
-            item.agent == "data_analyst" and not item.error and item.evidence_ids for item in results
+        deterministic_success = bool(results) and all(
+            item.agent in {"data_analyst", "repository_analyst"}
+            and not item.error
+            and item.evidence_ids
+            for item in results
         )
-        if data_only_success and evidence:
+        if deterministic_success and evidence:
             return Critique(
                 approved=True,
                 coverage_score=0.9,
@@ -44,8 +47,9 @@ class EvidenceCriticAgent:
                 (
                     "system",
                     "Return a strict structured audit. Approve only when the objective is substantially "
-                    "answered by traceable evidence. Follow-up agents may only be document_investigator "
-                    "web_researcher, or data_analyst. Do not request follow-ups when disabled.",
+                    "answered by traceable evidence. Follow-up agents may only be "
+                    "document_investigator, web_researcher, data_analyst, or repository_analyst. "
+                    "Do not request follow-ups when disabled.",
                 ),
                 (
                     "human",
@@ -89,7 +93,13 @@ class EvidenceCriticAgent:
         assigned_agents = set()
         for item in critique.follow_up_tasks:
             if (
-                item.agent not in {"document_investigator", "web_researcher", "data_analyst"}
+                item.agent
+                not in {
+                    "document_investigator",
+                    "web_researcher",
+                    "data_analyst",
+                    "repository_analyst",
+                }
                 or item.agent in assigned_agents
             ):
                 continue

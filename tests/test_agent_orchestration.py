@@ -11,7 +11,12 @@ from src.orchestration.research_graph import after_critique, dispatch_workers
 
 
 def test_phase_one_registry_contains_distinct_specialists():
-    assert set(AGENTS) == {"document_investigator", "web_researcher", "data_analyst"}
+    assert set(AGENTS) == {
+        "document_investigator",
+        "web_researcher",
+        "data_analyst",
+        "repository_analyst",
+    }
     assert AGENTS["document_investigator"].build_tools is not AGENTS["web_researcher"].build_tools
 
 
@@ -83,6 +88,14 @@ def test_supervisor_fallback_assigns_data_agent_for_dataset():
         ["Dataset ID dataset-123: sales.csv"],
     )
     assert [task.agent for task in plan.tasks] == ["data_analyst"]
+
+
+def test_supervisor_fallback_assigns_repository_agent_for_source_code():
+    plan = _fallback_plan(
+        "Analyze this codebase architecture and entry points",
+        ["Repository ID repository-123: project.zip"],
+    )
+    assert [task.agent for task in plan.tasks] == ["repository_analyst"]
 
 
 @pytest.mark.asyncio
@@ -166,6 +179,35 @@ async def test_successful_data_analysis_does_not_request_duplicate_revision(monk
     assert critique.approved is True
     assert critique.coverage_score == 0.9
     assert critique.follow_up_tasks == []
+
+
+@pytest.mark.asyncio
+async def test_successful_repository_analysis_uses_deterministic_audit(monkeypatch):
+    async def fake_evidence(task_id, limit):
+        return [{"evidence_id": "ev-1", "agent": "repository_analyst", "content": "paths"}]
+
+    monkeypatch.setattr(critic_module, "get_evidence", fake_evidence)
+    monkeypatch.setattr(
+        critic_module,
+        "get_structured_llm",
+        lambda schema: (_ for _ in ()).throw(AssertionError("LLM must not be called")),
+    )
+    critique = await critic_module.evidence_critic.review(
+        task_id="task-123",
+        session_id="session-123",
+        objective="Analyze repository architecture",
+        results=[
+            AgentResult(
+                agent="repository_analyst",
+                instruction="Inspect repository",
+                summary="Static findings",
+                evidence_ids=["ev-1"],
+            )
+        ],
+        allow_follow_ups=True,
+    )
+    assert critique.approved is True
+    assert critique.coverage_score == 0.9
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,12 @@ from src.core.config import settings
 from src.llms.provider import get_structured_llm
 from src.models.agent import AgentTask, ResearchPlan
 
-AVAILABLE_AGENTS = {"document_investigator", "web_researcher", "data_analyst"}
+AVAILABLE_AGENTS = {
+    "document_investigator",
+    "web_researcher",
+    "data_analyst",
+    "repository_analyst",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -25,6 +30,17 @@ def _fallback_plan(objective: str, available_data: list[str]) -> ResearchPlan:
                 agent="data_analyst",
                 instruction=f"Analyze the available workspace dataset for: {objective}",
                 rationale="The objective requires calculations from tabular data.",
+            )
+        )
+    if "repository id" in declared or any(
+        term in objective_lower
+        for term in ("codebase", "repository", "source code", "dependencies", "entry point")
+    ):
+        tasks.append(
+            AgentTask(
+                agent="repository_analyst",
+                instruction=f"Inspect the available source repository for: {objective}",
+                rationale="The objective requires static repository and source-code analysis.",
             )
         )
     if "uploaded document" in declared or "document" in objective_lower or "policy" in objective_lower:
@@ -65,9 +81,9 @@ async def create_research_plan(objective: str, available_data: list[str]) -> Res
                 "You supervise specialist agents. Break complex objectives into independent, bounded "
                 "assignments that can run in parallel. Available agents in this phase are "
                 "document_investigator for uploaded documents and web_researcher for external/current "
-                "information, and data_analyst for uploaded CSV/JSON/Excel datasets. Do not assign "
-                "unavailable agents. Avoid duplicate work and use data_analyst only when tabular data "
-                "is relevant.",
+                "information, data_analyst for uploaded CSV/JSON/Excel datasets, and "
+                "repository_analyst for uploaded source repository ZIPs. Do not assign unavailable "
+                "agents. Avoid duplicate work and assign specialists only when their data is relevant.",
             ),
             (
                 "human",

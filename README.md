@@ -1,8 +1,8 @@
 # Multi-Agent Research Workspace
 
 An educational, demo-oriented AI workspace that combines adaptive chat routing, retrieval-augmented
-generation, live web research, multi-agent orchestration, dataset analysis, evidence auditing, and
-downloadable reports.
+generation, live web research, multi-agent orchestration, dataset analysis, static repository
+analysis, evidence auditing, and downloadable reports.
 
 The application has a Streamlit UI and FastAPI backend. Groq supplies chat-model inference, while
 embeddings and reranking run locally with ONNX models. Qdrant stores vectors and MongoDB stores chat
@@ -37,6 +37,8 @@ The Research workspace runs a supervisor-worker LangGraph:
 - `web_researcher`: gathers current external evidence with Tavily.
 - `data_analyst`: computes dataset summaries, derived profit, grouped totals, top/bottom performers,
   and charts.
+- `repository_analyst`: safely inspects uploaded source ZIPs with bounded tree, file-read, and literal
+  code-search tools without executing repository code.
 - `evidence_critic`: audits evidence coverage and can request one bounded revision round.
 - `deliverable_builder`: creates and stores a Markdown research report.
 
@@ -76,6 +78,33 @@ Sample inputs are included:
 - `sample-policy.txt` for document and document-plus-web tests.
 - `sales.csv` for data-analysis tests.
 
+### Repository analysis
+
+- Accepts a source repository as a ZIP through the API.
+- Rejects traversal paths and symlinks; ignores binary files and generated/vendor directories such
+  as `.git`, `node_modules`, virtual environments, build outputs, and caches.
+- Enforces compressed upload, extracted text, file-count, and per-file limits to reduce ZIP-bomb and
+  oversized-document risk.
+- Stores repository metadata and individual source files in MongoDB rather than relying on a local
+  filesystem, so it works on stateless demo hosting.
+- Provides bounded source-tree listing, numbered file reads, and case-insensitive literal search.
+- Selects representative README, manifest, routing, entry-point, service, and component files rather
+  than relying on arbitrary keyword matches.
+- Uses one bounded grounded synthesis call to turn numbered source excerpts into a user-friendly
+  explanation of purpose, runtime flow, components, data/control flow, technology roles, testing,
+  deployment, and limitations with inline `path:line` citations. A deterministic explanatory
+  fallback remains available if model synthesis is unavailable.
+- Checkpoints inventory, manifest/entry-point inspection, objective search, and final evidence as
+  separate MongoDB stages. A retried outer graph node skips completed repository stages.
+- Streams repository-specific progress details, including file/language counts, inspected technology
+  markers, search terms, match counts, and explanatory synthesis completion.
+- Deduplicates identical ZIP uploads per workspace by content hash and reuses completed analysis
+  evidence safely during retries.
+
+Repository code is treated strictly as untrusted text and is never imported, built, or executed.
+The Research UI supports repository upload, focus presets, live activity, reconnectable history,
+cancellation, retry, specialist findings, evidence audit, and report downloads.
+
 ## Architecture
 
 ```mermaid
@@ -102,9 +131,11 @@ flowchart LR
     SUPERVISOR --> DOC[Document investigator]
     SUPERVISOR --> WEBAGENT[Web researcher]
     SUPERVISOR --> DATA[Data analyst]
+    SUPERVISOR --> REPO[Repository analyst]
     DOC --> LEDGER[MongoDB evidence ledger]
     WEBAGENT --> LEDGER
     DATA --> LEDGER
+    REPO --> LEDGER
     LEDGER --> CRITIC[Evidence critic]
     CRITIC --> REPORT[Report and chart artifacts]
 
@@ -147,6 +178,10 @@ active backend is Qdrant; the old in-process FAISS implementation has been remov
 7. The deliverable builder writes retry-safe artifacts; data-only deliverables remain deterministic.
 8. The result is persisted on the job. The UI receives live SSE updates and can later reconnect by ID.
 
+For repository work, the specialist additionally persists its own internal inventory, inspection,
+search, and result stages. This finer checkpoint is necessary because the outer LangGraph checkpoint
+surrounds the specialist worker as one graph node.
+
 ## Technology choices
 
 | Technology | Role | Why it is used |
@@ -160,7 +195,7 @@ active backend is Qdrant; the old in-process FAISS implementation has been remov
 | FastEmbed `BAAI/bge-small-en-v1.5` | Embeddings | Free local ONNX inference with small 384-dimension vectors |
 | FlashRank TinyBERT | Reranking | Free local cross-encoder relevance scoring |
 | Qdrant | Vector database | Persistent cosine search plus workspace payload filtering |
-| MongoDB | Application storage | Flexible storage for history, datasets, evidence, and binary artifacts |
+| MongoDB | Application storage | Flexible storage for history, datasets, repositories, evidence, and artifacts |
 | Tavily | Web search | Search results with source titles, URLs, snippets, and scores |
 | pandas/Matplotlib | Data agent | Safe tabular calculations and server-side PNG charts |
 | Docker Compose | Local stack | Reproducible API, UI, MongoDB, Qdrant, and persistent volumes |
@@ -199,7 +234,7 @@ Important trade-offs:
 |   |-- api/                     RAG and multi-agent HTTP endpoints
 |   |-- config/                  Prompt templates
 |   |-- core/                    Settings, logging, prompt budgets, integration errors
-|   |-- data/                    Dataset parsing and validation
+|   |-- data/                    Dataset and safe repository parsing/validation
 |   |-- db/                      MongoDB jobs, checkpoints, datasets, evidence, artifacts
 |   |-- llms/                    Groq, FastEmbed, and FlashRank factories
 |   |-- memory/                  MongoDB chat history
@@ -288,6 +323,13 @@ FastEmbed vectors at an older 1536-dimensional collection.
 | `MAX_DATASET_ROWS` | `10000` | Maximum stored rows |
 | `MAX_DATASET_COLUMNS` | `100` | Maximum columns |
 | `MAX_HISTORY_MESSAGES` | `30` | Bounded chat history |
+| `MAX_REPOSITORY_UPLOAD_BYTES` | `10485760` | Compressed repository ZIP limit |
+| `MAX_REPOSITORY_FILES` | `1000` | Maximum supported text/source files |
+| `MAX_REPOSITORY_FILE_BYTES` | `524288` | Maximum extracted bytes per stored file |
+| `MAX_REPOSITORY_TOTAL_BYTES` | `20971520` | Maximum total extracted stored text |
+| `REPOSITORY_SEARCH_MAX_MATCHES` | `50` | Maximum literal code-search results |
+| `REPOSITORY_EXPLANATION_CONTEXT_CHARS` | `14000` | Grounded source context budget |
+| `REPOSITORY_EXPLANATION_OUTPUT_TOKENS` | `1800` | Maximum explanatory synthesis output |
 
 ### Agent budget settings
 
@@ -388,6 +430,14 @@ pause between model-heavy tests because provider free-tier limits are account-de
     deterministic `research-report.md`. For the included sample, revenue is `765000` and profit is
     `255000`.
 
+11. Create a ZIP with the PowerShell command in **Repository-analysis example**. In the Research
+    sidebar choose **Repository**, upload it, then open the **Repository analysis** tab. Select a
+    focus and start analysis. Expect live inventory, inspection, search, critic, and report events;
+    one `repository_analyst` result with file/line evidence; and a non-empty
+    `research-report.md`. Upload the identical ZIP again and expect **Reused** rather than a second
+    repository. To test reconnection or cancellation, open the same workspace ID in another tab and
+    use **Durable job history** while the first tab is running a larger repository.
+
 Research commonly takes 20–40 seconds because Groq calls are deliberately paced.
 
 ## Run without Docker
@@ -432,6 +482,8 @@ streamlit run streamlit_app/home.py --server.port 8501
 | `DELETE` | `/rag/history` | Clear workspace chat history |
 | `POST` | `/agents/datasets/upload` | Store CSV/JSON/XLSX |
 | `GET` | `/agents/datasets` | List workspace datasets |
+| `POST` | `/agents/repositories/upload` | Safely ingest a repository ZIP |
+| `GET` | `/agents/repositories` | List workspace repositories |
 | `POST` | `/agents/research` | Queue research; returns HTTP 202 and a task ID |
 | `GET` | `/agents/tasks` | List durable jobs for a workspace |
 | `GET` | `/agents/tasks/{task_id}` | Read job status and progress |
@@ -495,6 +547,51 @@ Reusing it with a different body returns HTTP `409`.
 
 Interactive request schemas and responses are available at `/docs`.
 
+### Repository-analysis example
+
+Create a small ZIP without local environments or generated folders:
+
+```powershell
+Compress-Archive `
+    -Path src,tests,README.md,requirements.txt,pyproject.toml,Dockerfile,docker-compose.yml `
+    -DestinationPath demo-repository.zip `
+    -Force
+```
+
+Upload and queue analysis in one workspace:
+
+```powershell
+$session = "repository-demo-001"
+$upload = Invoke-RestMethod `
+    -Method Post `
+    -Uri http://localhost:8000/agents/repositories/upload `
+    -Headers @{
+        "X-Session-ID" = $session
+        "X-Description" = "Multi-agent research workspace source"
+    } `
+    -Form @{ file = Get-Item .\demo-repository.zip }
+
+$body = @{
+    objective = "Analyze repository $($upload.repository_id), identify its architecture, likely entry points, dependencies, tests, and FastAPI usage."
+    session_id = $session
+    available_data = @("Repository ID $($upload.repository_id): $($upload.filename)")
+} | ConvertTo-Json -Depth 5
+
+$job = Invoke-RestMethod `
+    -Method Post `
+    -Uri http://localhost:8000/agents/research `
+    -Headers @{ "Idempotency-Key" = [guid]::NewGuid().ToString() } `
+    -ContentType application/json `
+    -Body $body
+
+$job
+```
+
+Use the existing task status, event, SSE, and result endpoints with the returned task ID. The same
+flow is available under the **Repository analysis** tab in Streamlit, including focus presets and
+repository-specific live activity. On older
+PowerShell versions without `-Form`, use `curl.exe -F` or the interactive `/docs` upload form.
+
 ## Persistence and workspace isolation
 
 Docker volumes:
@@ -503,7 +600,8 @@ Docker volumes:
 - `qdrant_data`: document vectors and payloads.
 - `model_cache`: FastEmbed and FlashRank model files.
 
-MongoDB collections include chat history, datasets, dataset batches, evidence, artifacts,
+MongoDB collections include chat history, datasets, dataset batches, repositories, repository files,
+repository-analysis checkpoints, evidence, artifacts,
 `research_jobs`, `research_events`, `langgraph_checkpoints`, and `langgraph_writes`. Job results,
 events, checkpoints, and side effects survive ordinary refreshes and process restarts. Qdrant uses
 one shared collection filtered by `session_id` and `document_id`.
@@ -613,6 +711,8 @@ Development conventions remain in [CODE_STYLE_GUIDE.md](CODE_STYLE_GUIDE.md).
 - Research is asynchronous, checkpointed, leased, and intended for demo-sized tasks.
 - Cancellation is cooperative at graph-node boundaries; in-flight provider calls are not forcibly
   terminated.
+- Repository analysis is static and bounded; it does not execute builds, tests, linters, or uploaded
+  code.
 - Agent and prompt budgets prioritize Groq free-tier reliability over maximum parallelism.
 - Local Qdrant and MongoDB ports are not published outside the Compose network.
 - No load balancer or multi-node infrastructure is required for the intended educational deployment.

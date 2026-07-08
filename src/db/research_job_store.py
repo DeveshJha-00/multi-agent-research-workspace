@@ -214,15 +214,16 @@ async def append_event(
     details: dict[str, Any] | None = None,
 ) -> dict | None:
     now = datetime.now(timezone.utc)
+    bounded_progress = max(0, min(progress, 100))
     job = await jobs.find_one_and_update(
         {"task_id": task_id},
         {
             "$inc": {"event_sequence": 1},
             "$set": {
                 "stage": stage,
-                "progress": max(0, min(progress, 100)),
                 "updated_at": now,
             },
+            "$max": {"progress": bounded_progress},
         },
         return_document=ReturnDocument.AFTER,
     )
@@ -233,7 +234,7 @@ async def append_event(
         "sequence": job["event_sequence"],
         "event": event,
         "stage": stage,
-        "progress": max(0, min(progress, 100)),
+        "progress": job["progress"],
         "message": message,
         "details": details or {},
         "created_at": now,

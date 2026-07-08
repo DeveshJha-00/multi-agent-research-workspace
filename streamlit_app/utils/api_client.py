@@ -84,6 +84,34 @@ def get_datasets(session_id: str) -> list[dict]:
         return []
 
 
+def repository_upload(file, description: str, session_id: str) -> dict:
+    try:
+        response = requests.post(
+            f"{PYTHON_BASE_URL}/agents/repositories/upload",
+            files={"file": (file.name, file.getvalue(), file.type or "application/zip")},
+            headers={"X-Description": description, "X-Session-ID": session_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        return {"error": _error(exc, "Repository upload failed")}
+
+
+def get_repositories(session_id: str) -> list[dict]:
+    try:
+        response = requests.get(
+            f"{PYTHON_BASE_URL}/agents/repositories",
+            headers={"X-Session-ID": session_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        _error(exc, "Unable to load repositories")
+        return []
+
+
 def create_research_job(
     objective: str,
     session_id: str,

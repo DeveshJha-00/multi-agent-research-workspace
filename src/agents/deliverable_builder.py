@@ -80,6 +80,33 @@ class DeliverableBuilderAgent:
             sections.append(f"- `{evidence_id}` — {source}")
         return "\n".join(sections).strip()
 
+    @staticmethod
+    def _repository_report(context: AgentContext, evidence: list[dict]) -> str:
+        """Preserve static code findings and their paths without a second model dependency."""
+        sections = [
+            "# Repository analysis report",
+            "",
+            "## Objective",
+            context.objective,
+            "",
+            "## Explanation and findings",
+        ]
+        for result in context.prior_results:
+            sections.extend(["", result.summary or "No repository summary was returned."])
+        sections.extend(["", "## Evidence sources"])
+        for item in evidence[:20]:
+            source = str(item.get("source") or "Unknown source")
+            evidence_id = str(item.get("evidence_id") or "unidentified")
+            sections.append(f"- `{evidence_id}` - {source}")
+        sections.extend(
+            [
+                "",
+                "## Execution boundary",
+                "Uploaded repository code was inspected as text and was not executed.",
+            ]
+        )
+        return "\n".join(sections).strip()
+
     async def build(self, context: AgentContext) -> tuple[AgentResult, list[ArtifactRecord]]:
         evidence = await get_evidence(context.task_id, limit=30)
         prior = compact_results(context.prior_results, settings.critic_results_chars)
@@ -97,8 +124,13 @@ class DeliverableBuilderAgent:
         data_only = bool(context.prior_results) and all(
             result.agent == "data_analyst" for result in context.prior_results
         )
+        repository_only = bool(context.prior_results) and all(
+            result.agent == "repository_analyst" for result in context.prior_results
+        )
         if data_only:
             markdown = self._data_report(context, evidence)
+        elif repository_only:
+            markdown = self._repository_report(context, evidence)
         else:
             response = await (prompt | get_llm()).ainvoke(
                 {"objective": context.objective, "results": prior, "evidence": evidence_text}

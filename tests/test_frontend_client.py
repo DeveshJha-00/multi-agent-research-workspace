@@ -52,6 +52,47 @@ def test_artifact_download_returns_content_and_media_type(monkeypatch):
     )
 
 
+def test_repository_client_uploads_zip_and_lists_workspace_repositories(monkeypatch):
+    captured = {}
+
+    class UploadedFile:
+        name = "project.zip"
+        type = "application/zip"
+
+        @staticmethod
+        def getvalue():
+            return b"zip-content"
+
+    def fake_post(url, **kwargs):
+        captured["post_url"] = url
+        captured["post"] = kwargs
+        return FakeResponse({"repository_id": "repository-1", "reused": False})
+
+    def fake_get(url, **kwargs):
+        captured["get_url"] = url
+        captured["get"] = kwargs
+        return FakeResponse([{"repository_id": "repository-1", "filename": "project.zip"}])
+
+    monkeypatch.setattr(api_client.requests, "post", fake_post)
+    monkeypatch.setattr(api_client.requests, "get", fake_get)
+
+    uploaded = api_client.repository_upload(UploadedFile(), "Demo source", "session-123")
+    repositories = api_client.get_repositories("session-123")
+
+    assert uploaded["repository_id"] == "repository-1"
+    assert captured["post"]["files"]["file"][0] == "project.zip"
+    assert captured["post"]["headers"]["X-Session-ID"] == "session-123"
+    assert repositories[0]["repository_id"] == "repository-1"
+    assert captured["get"]["headers"]["X-Session-ID"] == "session-123"
+
+
+def test_research_ui_exposes_repository_upload_and_durable_analysis():
+    content = Path("streamlit_app/pages/research.py").read_text(encoding="utf-8")
+    assert '"Document", "Dataset", "Repository"' in content
+    assert "repository_inventory_completed" in content
+    assert "Analyze repository" in content
+
+
 def test_frontend_image_exposes_project_package_path():
     content = Path("Dockerfile.streamlit").read_text(encoding="utf-8")
     assert "PYTHONPATH=/app" in content

@@ -10,8 +10,10 @@ from fastapi.responses import StreamingResponse
 
 from src.core.config import settings
 from src.data.ingestion import ingest_dataset
+from src.data.repository_ingestion import ingest_repository
 from src.db.artifact_store import get_artifact
 from src.db.dataset_store import list_datasets
+from src.db.repository_store import list_repositories
 from src.db.research_job_store import (
     TERMINAL_STATUSES,
     IdempotencyConflictError,
@@ -25,6 +27,7 @@ from src.db.research_job_store import (
 )
 from src.models.api import (
     DatasetUploadResponse,
+    RepositoryUploadResponse,
     ResearchEventResponse,
     ResearchJobCreated,
     ResearchJobStatusResponse,
@@ -50,6 +53,23 @@ async def get_datasets(
     session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
 ) -> list[dict]:
     return await list_datasets(session_id)
+
+
+@router.post("/repositories/upload", response_model=RepositoryUploadResponse)
+async def upload_repository(
+    file: Annotated[UploadFile, File()],
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+    description: Annotated[str, Header(alias="X-Description", max_length=500)] = "",
+) -> RepositoryUploadResponse:
+    result = await ingest_repository(file=file, session_id=session_id, description=description)
+    return RepositoryUploadResponse(**result)
+
+
+@router.get("/repositories")
+async def get_repositories(
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> list[dict]:
+    return await list_repositories(session_id)
 
 
 @router.post("/research", response_model=ResearchJobCreated, status_code=status.HTTP_202_ACCEPTED)

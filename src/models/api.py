@@ -94,3 +94,13 @@ class DatasetUploadResponse(BaseModel):
     description: str
     columns: list[str]
     row_count: int
+
+
+class RepositoryUploadResponse(BaseModel):
+    repository_id: str
+    filename: str
+    description: str
+    file_count: int
+    total_bytes: int
+    languages: dict[str, int] = Field(default_factory=dict)
+    reused: bool = False

@@ -1,4 +1,4 @@
-"""Browser UI for durable multi-agent research and live progress."""
+"""Browser UI for durable multi-agent research and repository analysis."""
 
 from uuid import uuid4
 
@@ -11,9 +11,11 @@ from streamlit_app.utils.api_client import (
     document_upload_rag,
     download_artifact,
     get_datasets,
+    get_repositories,
     get_research_job,
     get_research_jobs,
     get_research_result,
+    repository_upload,
     retry_research_job,
     stream_research_events,
 )
@@ -28,19 +30,44 @@ if "session_id" not in st.session_state:
 st.session_state.setdefault("research_runs", [])
 st.session_state.setdefault("uploaded_files", {})
 st.session_state.setdefault("uploaded_datasets", {})
+st.session_state.setdefault("uploaded_repositories", {})
+
+
+def _render_event(event: dict) -> None:
+    st.write(f"**{event['stage'].replace('_', ' ').title()}** - {event['message']}")
+    details = event.get("details", {})
+    if event["event"] == "repository_inventory_completed":
+        languages = ", ".join(
+            f"{name}: {count}" for name, count in details.get("languages", {}).items()
+        )
+        st.caption(
+            f"Files: {details.get('file_count', 0)}"
+            + (f" | Languages: {languages}" if languages else "")
+        )
+    elif event["event"] == "repository_inspection_completed":
+        technologies = ", ".join(details.get("technologies", [])) or "none detected"
+        st.caption(
+            f"Inspected {details.get('files_inspected', 0)} manifests/entry points | "
+            f"Technology markers: {technologies}"
+        )
+    elif event["event"] == "repository_search_completed":
+        terms = ", ".join(details.get("terms", [])) or "none"
+        st.caption(f"Matches: {details.get('matches', 0)} | Search terms: {terms}")
+    elif event["event"] == "repository_synthesis_completed":
+        st.caption(f"Generated {details.get('characters', 0)} characters of grounded explanation")
 
 
 def watch_job(task_id: str) -> None:
     """Render persisted events live, then load the completed durable result."""
     last_sequence = 0
-    with st.status(f"Watching research job {task_id[:8]}…", expanded=True) as activity:
+    with st.status(f"Watching research job {task_id[:8]}...", expanded=True) as activity:
         for event in stream_research_events(task_id, st.session_state.session_id, last_sequence):
             if event.get("error"):
                 st.warning(event["error"])
                 break
             last_sequence = event["sequence"]
-            st.write(f"**{event['stage'].replace('_', ' ').title()}** — {event['message']}")
-            activity.update(label=f"{event['progress']}% · {event['message']}")
+            _render_event(event)
+            activity.update(label=f"{event['progress']}% | {event['message']}")
 
         job = get_research_job(task_id, st.session_state.session_id)
         if job.get("status") == "completed":
@@ -59,19 +86,32 @@ def watch_job(task_id: str) -> None:
         elif job.get("error"):
             activity.update(label="Unable to read job status", state="error")
         else:
-            activity.update(label=f"Connection closed · job is {job.get('status')}")
+            activity.update(label=f"Connection closed | job is {job.get('status')}")
+
+
+def start_job(objective: str, available_data: list[str]) -> None:
+    created = create_research_job(
+        objective.strip(),
+        st.session_state.session_id,
+        available_data,
+        idempotency_key=str(uuid4()),
+    )
+    if created.get("error"):
+        st.error(created["error"])
+    else:
+        watch_job(created["task_id"])
 
 
 st.title("Multi-agent research")
 st.caption(
-    f"Workspace: {st.session_state.session_id} · jobs survive refreshes and service restarts"
+    f"Workspace: {st.session_state.session_id} | jobs survive refreshes and service restarts"
 )
 if st.button("Back to chat"):
     st.switch_page("pages/chat.py")
 
 with st.sidebar:
     st.header("Workspace inputs")
-    input_type = st.radio("Upload type", ["Document", "Dataset"], horizontal=True)
+    input_type = st.radio("Upload type", ["Document", "Dataset", "Repository"])
 
     if input_type == "Document":
         uploaded = st.file_uploader("PDF or TXT", type=["pdf", "txt"], key="research_document")
@@ -84,7 +124,7 @@ with st.sidebar:
                 st.success(f"Indexed {result['filename']}")
             else:
                 st.error(result.get("error", "Document upload failed."))
-    else:
+    elif input_type == "Dataset":
         uploaded = st.file_uploader(
             "CSV, JSON, or Excel", type=["csv", "json", "xlsx"], key="research_dataset"
         )
@@ -97,14 +137,34 @@ with st.sidebar:
                 st.success(f"Stored {result['filename']} ({result['row_count']} rows)")
             else:
                 st.error(result.get("error", "Dataset upload failed."))
+    else:
+        uploaded = st.file_uploader("Source repository ZIP", type=["zip"], key="repository_zip")
+        description = st.text_input("Repository description", key="repository_description")
+        if st.button("Store repository", disabled=not uploaded):
+            with st.spinner("Validating and storing safe source files..."):
+                result = repository_upload(uploaded, description, st.session_state.session_id)
+            if not result.get("error"):
+                st.session_state.uploaded_repositories[result["repository_id"]] = result
+                action = "Reused" if result.get("reused") else "Stored"
+                st.success(f"{action} {result['filename']} ({result['file_count']} source files)")
+            else:
+                st.error(result.get("error", "Repository upload failed."))
+        st.caption(
+            "ZIPs are inspected as untrusted text. Vendor folders, binaries, symlinks, and unsafe "
+            "paths are ignored; uploaded code is never executed."
+        )
 
     st.divider()
     st.subheader("Available data")
     for item in st.session_state.uploaded_files.values():
-        st.caption(f"Document · {item['filename']}")
+        st.caption(f"Document | {item['filename']}")
     datasets = get_datasets(st.session_state.session_id)
     for item in datasets:
-        st.caption(f"Dataset · {item['filename']} · {item['row_count']} rows")
+        st.caption(f"Dataset | {item['filename']} | {item['row_count']} rows")
+    repositories = get_repositories(st.session_state.session_id)
+    for item in repositories:
+        languages = ", ".join(item.get("languages", {})) or "unknown language"
+        st.caption(f"Repository | {item['filename']} | {item['file_count']} files | {languages}")
 
     if st.button("New workspace"):
         for key in list(st.session_state):
@@ -115,38 +175,76 @@ available_data = [
     f"Uploaded document: {item['filename']}" for item in st.session_state.uploaded_files.values()
 ]
 available_data.extend(
-    f"Dataset ID {item['dataset_id']}: {item['filename']} — {item.get('description', '')}"
+    f"Dataset ID {item['dataset_id']}: {item['filename']} - {item.get('description', '')}"
     for item in datasets
 )
-
-objective = st.text_area(
-    "Research objective",
-    height=150,
-    placeholder=(
-        "Example: Analyze the sales dataset, compare regional performance, create a chart, "
-        "and produce an evidence-backed report."
-    ),
+available_data.extend(
+    f"Repository ID {item['repository_id']}: {item['filename']} - {item.get('description', '')}"
+    for item in repositories
 )
 
-if st.button("Start specialist team", type="primary", disabled=len(objective.strip()) < 10):
-    created = create_research_job(
-        objective.strip(),
-        st.session_state.session_id,
-        available_data,
-        idempotency_key=str(uuid4()),
+research_tab, repository_tab = st.tabs(["General research", "Repository analysis"])
+
+with research_tab:
+    objective = st.text_area(
+        "Research objective",
+        height=150,
+        placeholder=(
+            "Example: Analyze the sales dataset, compare regional performance, create a chart, "
+            "and produce an evidence-backed report."
+        ),
     )
-    if created.get("error"):
-        st.error(created["error"])
+    if st.button("Start specialist team", type="primary", disabled=len(objective.strip()) < 10):
+        start_job(objective, available_data)
+
+with repository_tab:
+    if not repositories:
+        st.info("Upload a repository ZIP from the sidebar to enable repository analysis.")
     else:
-        watch_job(created["task_id"])
+        selected_repository = st.selectbox(
+            "Repository",
+            repositories,
+            format_func=lambda item: f"{item['filename']} ({item['file_count']} files)",
+        )
+        focus = st.selectbox(
+            "Analysis focus",
+            [
+                "Architecture and entry points",
+                "Dependencies and technology stack",
+                "Tests and code-quality signals",
+                "Security-sensitive code paths",
+                "Custom objective",
+            ],
+        )
+        default_objective = (
+            f"Analyze repository {selected_repository['repository_id']} with focus on "
+            f"{focus.lower()}. Cite relevant file paths and line matches, identify limitations, "
+            "and produce an evidence-backed report."
+        )
+        repository_objective = st.text_area(
+            "Repository-analysis objective",
+            value=default_objective,
+            height=150,
+            key=f"repository-objective-{selected_repository['repository_id']}-{focus}",
+        )
+        st.caption(
+            "The repository specialist checkpoints inventory, inspection, search, and evidence "
+            "stages. Its activity remains reconnectable from durable job history."
+        )
+        if st.button(
+            "Analyze repository",
+            type="primary",
+            disabled=len(repository_objective.strip()) < 10,
+        ):
+            start_job(repository_objective, available_data)
 
 jobs = get_research_jobs(st.session_state.session_id)
 if jobs:
     with st.expander("Durable job history", expanded=False):
         for job in jobs:
             columns = st.columns([5, 2, 1, 1])
-            columns[0].write(f"{job['objective'][:90]} · `{job['task_id'][:8]}`")
-            columns[1].write(f"{job['status']} · {job['progress']}%")
+            columns[0].write(f"{job['objective'][:90]} | `{job['task_id'][:8]}`")
+            columns[1].write(f"{job['status']} | {job['progress']}%")
             if columns[2].button("Watch", key=f"watch-{job['task_id']}"):
                 watch_job(job["task_id"])
             if job["status"] in {"queued", "running", "cancel_requested"}:
@@ -172,10 +270,10 @@ for run_index, run in enumerate(st.session_state.research_runs):
 
     with st.expander("Specialist activity"):
         for worker in run.get("worker_results", []):
-            st.markdown(f"**{worker['agent']}** — {worker['instruction']}")
+            st.markdown(f"**{worker['agent']}** - {worker['instruction']}")
             st.write(worker.get("summary", ""))
             st.caption(
-                f"Tool calls: {worker.get('tool_calls', 0)} · "
+                f"Tool calls: {worker.get('tool_calls', 0)} | "
                 f"Evidence items: {len(worker.get('evidence_ids', []))}"
             )
             if worker.get("error"):

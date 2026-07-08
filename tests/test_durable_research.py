@@ -23,6 +23,7 @@ def test_research_submission_is_async_and_exposes_job_lifecycle_routes():
     assert ("/agents/tasks/{task_id}/events/stream", frozenset({"GET"})) in routes
     assert ("/agents/tasks/{task_id}/retry", frozenset({"POST"})) in routes
     assert ("/agents/tasks/{task_id}", frozenset({"DELETE"})) in routes
+    assert ("/agents/repositories/upload", frozenset({"POST"})) in routes
 
 
 def test_job_status_model_accepts_durable_lifecycle_fields():
