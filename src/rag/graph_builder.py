@@ -194,13 +194,21 @@ async def query_classifier(state: State) -> dict:
     _log_documents("retrieved", documents)
     prompt = PromptTemplate.from_template(config.prompt("classify_prompt"))
     classifier = get_structured_llm(RouteIdentifier)
-    result = await (prompt | classifier).ainvoke(
-        {
-            "question": question,
-            "history": _history(state["messages"][:-1]),
-            "context": _format_documents(documents, max_chars=5000),
-        }
-    )
+    try:
+        result = await (prompt | classifier).ainvoke(
+            {
+                "question": question,
+                "history": _history(state["messages"][:-1]),
+                "context": _format_documents(documents, max_chars=5000),
+            }
+        )
+    except Exception:
+        logger.exception("query_classifier_failed; using deterministic fallback route")
+        fallback_route = "index" if documents else "general"
+        result = RouteIdentifier(
+            route=fallback_route,
+            reason="Classifier structured output failed; selected a safe fallback route.",
+        )
     effective_route = "index" if documents and result.route != "index" else result.route
     logger.info(
         "query_routed route=%s effective_route=%s candidates=%d",

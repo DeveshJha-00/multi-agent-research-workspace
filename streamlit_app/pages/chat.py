@@ -5,6 +5,7 @@ import time
 from uuid import uuid4
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from streamlit_app.utils.api_client import (
     create_evaluation,
@@ -131,10 +132,24 @@ def _evaluation_controls(message: dict) -> None:
 def _render_chat_message(message: dict) -> None:
     st.markdown(message["content"])
     if message.get("tts_audio_base64"):
-        st.audio(
-            base64.b64decode(message["tts_audio_base64"]),
-            format=message.get("tts_mime_type", "audio/wav"),
-        )
+        mime_type = message.get("tts_mime_type", "audio/wav")
+        audio_base64 = message["tts_audio_base64"]
+        if message.get("tts_autoplay"):
+            components.html(
+                (
+                    '<audio controls autoplay style="width: 100%;">'
+                    f'<source src="data:{mime_type};base64,{audio_base64}" type="{mime_type}">'
+                    "Your browser does not support audio playback."
+                    "</audio>"
+                ),
+                height=54,
+            )
+            message["tts_autoplay"] = False
+        else:
+            st.audio(
+                base64.b64decode(audio_base64),
+                format=mime_type,
+            )
         if message.get("tts_shortened"):
             st.caption("Voice playback is a shortened preview; full answer is above.")
     if message.get("tts_error"):
@@ -177,6 +192,7 @@ def _attach_voice_response(message: dict) -> dict:
             "tts_spoken_text": audio.get("spoken_text"),
             "tts_shortened": audio.get("shortened", False),
             "tts_speaker": audio.get("speaker"),
+            "tts_autoplay": True,
         }
     )
     if audio.get("warning"):

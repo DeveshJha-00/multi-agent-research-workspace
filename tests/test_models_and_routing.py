@@ -21,6 +21,11 @@ def test_route_is_strict_literal():
         RouteIdentifier(route="anything", reason="invalid")
 
 
+def test_route_reason_allows_verbose_model_explanations():
+    result = RouteIdentifier(route="general", reason="x" * 1000)
+    assert result.reason == "x" * 1000
+
+
 @pytest.mark.parametrize(
     ("route", "expected"),
     [("index", "rerank"), ("general", "general_llm"), ("search", "web_search")],

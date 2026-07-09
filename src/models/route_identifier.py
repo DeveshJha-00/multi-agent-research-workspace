@@ -7,4 +7,4 @@ from pydantic import BaseModel, Field
 
 class RouteIdentifier(BaseModel):
     route: Literal["index", "general", "search"]
-    reason: str = Field(min_length=1, max_length=300)
+    reason: str = Field(min_length=1, max_length=2000)

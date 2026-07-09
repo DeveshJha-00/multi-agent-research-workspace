@@ -5,6 +5,7 @@ prompts:
     - general: it is casual conversation or stable general knowledge and does not need the excerpts.
     - search: it needs current, external, or niche information not present in the excerpts.
     Prefer index whenever relevant document evidence exists. Use conversation history to resolve follow-ups.
+    Keep the reason concise.
 
     Conversation:
     {history}
