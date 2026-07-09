@@ -115,8 +115,11 @@ with st.sidebar:
 
     if input_type == "Document":
         uploaded = st.file_uploader("PDF or TXT", type=["pdf", "txt"], key="research_document")
-        description = st.text_input("Document description", key="research_document_description")
-        if st.button("Index document", disabled=not (uploaded and description.strip())):
+        description = st.text_input(
+            "Document description (optional)",
+            key="research_document_description",
+        )
+        if st.button("Index document", disabled=not uploaded):
             with st.spinner("Indexing document in Qdrant..."):
                 result = document_upload_rag(uploaded, description, st.session_state.session_id)
             if not result.get("error"):

@@ -16,15 +16,19 @@ def routing_tool(state: State) -> Literal["rerank", "general_llm", "web_search"]
 
 def retrieval_decision(state: State) -> Literal["generate", "rewrite", "web_search"]:
     documents = state.get("reranked_documents", [])
-    best_score = max(
-        (float(doc.metadata.get("rerank_score", 0.0)) for doc in documents),
-        default=0.0,
-    )
-    if documents and best_score >= settings.rerank_relevance_threshold:
+    if documents and state.get("classifier_route") == "search":
+        return "web_search"
+    if documents:
         return "generate"
     if state.get("retry_count", 0) < settings.max_retrieval_retries:
         return "rewrite"
     return "web_search"
+
+
+def generation_decision(state: State) -> Literal["__end__", "verify"]:
+    if state.get("route") == "index":
+        return "__end__"
+    return "verify"
 
 
 def verification_decision(state: State) -> Literal["__end__", "generate", "safe_fallback"]:

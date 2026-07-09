@@ -11,6 +11,7 @@ class State(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     session_id: str
     route: Literal["index", "general", "search"]
+    classifier_route: Literal["index", "general", "search"]
     latest_query: str
     documents: list[Document]
     reranked_documents: list[Document]
@@ -19,4 +20,5 @@ class State(TypedDict, total=False):
     sources: list[dict]
     verification_attempts: int
     verification_context: str
+    evaluation_contexts: list[dict]
     faithful: bool

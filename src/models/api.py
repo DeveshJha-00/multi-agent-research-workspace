@@ -16,6 +16,7 @@ class Source(BaseModel):
 
 
 class QueryResponse(BaseModel):
+    response_id: str
     content: str
     route: Literal["index", "general", "search"]
     sources: list[Source] = Field(default_factory=list)
@@ -26,11 +27,67 @@ class UploadResponse(BaseModel):
     document_id: str
     filename: str
     chunks_indexed: int
+    parser_provider: str = "local"
+    detected_language: str = "en-IN"
+    script: str = "Latn"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class IndexedDocumentResponse(BaseModel):
+    document_id: str
+    filename: str
+    description: str = ""
+    chunks_indexed: int
+    parser_provider: str = "unknown"
+    detected_language: str = "unknown"
+    script: str = "unknown"
 
 
 class DeleteResponse(BaseModel):
     status: bool
     document_id: str
+
+
+class EvaluationRequest(BaseModel):
+    response_id: str = Field(min_length=8, max_length=200)
+    reference: str | None = Field(default=None, max_length=12_000)
+
+
+EvaluationJobStatus = Literal["queued", "running", "completed", "failed"]
+
+
+class EvaluationMetricResult(BaseModel):
+    name: str
+    status: Literal["completed", "failed", "not_applicable"]
+    score: float | None = None
+    reason: str | None = None
+    duration_seconds: float | None = None
+    error: str | None = None
+
+
+class EvaluationCreated(BaseModel):
+    evaluation_id: str
+    response_id: str
+    status: EvaluationJobStatus
+    reused: bool = False
+
+
+class EvaluationStatusResponse(BaseModel):
+    evaluation_id: str
+    response_id: str
+    status: EvaluationJobStatus
+    progress: int = Field(ge=0, le=100)
+    attempts: int
+    metric_names: list[str]
+    metrics: dict[str, EvaluationMetricResult] = Field(default_factory=dict)
+    context_count: int = 0
+    reference_supplied: bool = False
+    duration_seconds: float | None = None
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class ResearchRequest(BaseModel):

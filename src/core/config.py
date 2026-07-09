@@ -35,6 +35,27 @@ class Settings(BaseSettings):
     groq_max_output_tokens: int = Field(default=1200, ge=128, le=4096)
     groq_requests_per_second: float = Field(default=0.2, gt=0.0, le=1.0)
     tavily_api_key: str = ""
+    sarvam_api_key: str = ""
+    document_parser_provider: Literal["auto", "local", "sarvam"] = "auto"
+    enable_multilingual_docs: bool = True
+    sarvam_base_url: str = "https://api.sarvam.ai"
+    sarvam_document_language: str = "auto"
+    sarvam_document_output_format: Literal["md", "html", "json"] = "md"
+    sarvam_max_pages_per_job: int = Field(default=10, ge=1, le=10)
+    sarvam_job_poll_seconds: float = Field(default=2.0, ge=0.5, le=30.0)
+    sarvam_job_timeout_seconds: int = Field(default=180, ge=30, le=1200)
+    default_ui_language: str = "en-IN"
+    default_answer_language: str = "auto"
+    ragas_enabled: bool = True
+    ragas_do_not_track: bool = True
+    ragas_judge_model: str | None = None
+    ragas_judge_base_url: str = "https://api.groq.com/openai/v1"
+    ragas_max_contexts: int = Field(default=3, ge=1, le=10)
+    ragas_max_context_chars: int = Field(default=12_000, ge=1000, le=60_000)
+    evaluation_worker_poll_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
+    evaluation_job_lease_seconds: int = Field(default=600, ge=30, le=3600)
+    evaluation_job_max_attempts: int = Field(default=3, ge=1, le=10)
+    evaluation_metric_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
 
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
@@ -112,6 +133,10 @@ class Settings(BaseSettings):
     @property
     def tavily_configured(self) -> bool:
         return self._credential_is_configured(self.tavily_api_key)
+
+    @property
+    def effective_ragas_judge_model(self) -> str:
+        return self.ragas_judge_model or self.groq_chat_model
 
 
 @lru_cache

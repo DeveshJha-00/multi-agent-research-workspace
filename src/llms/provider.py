@@ -30,7 +30,7 @@ def get_llm() -> ChatGroq:
         model=settings.groq_chat_model,
         temperature=settings.llm_temperature,
         reasoning_effort="low",
-        max_retries=1,
+        max_retries=0,
         max_tokens=settings.groq_max_output_tokens,
         timeout=60,
         rate_limiter=get_rate_limiter(),
@@ -52,18 +52,18 @@ class FastEmbedEmbeddings:
             lazy_load=True,
         )
 
-    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-        def embed() -> list[list[float]]:
-            vectors = self._model.embed(texts, batch_size=settings.embedding_batch_size)
-            return [vector.tolist() for vector in vectors]
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._model.embed(texts, batch_size=settings.embedding_batch_size)
+        return [vector.tolist() for vector in vectors]
 
-        return await asyncio.to_thread(embed)
+    def embed_query(self, text: str) -> list[float]:
+        return next(iter(self._model.query_embed(text))).tolist()
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return await asyncio.to_thread(self.embed_documents, texts)
 
     async def aembed_query(self, text: str) -> list[float]:
-        def embed() -> list[float]:
-            return next(iter(self._model.query_embed(text))).tolist()
-
-        return await asyncio.to_thread(embed)
+        return await asyncio.to_thread(self.embed_query, text)
 
 
 @lru_cache

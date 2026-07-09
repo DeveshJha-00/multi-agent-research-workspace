@@ -97,3 +97,44 @@ def test_frontend_image_exposes_project_package_path():
     content = Path("Dockerfile.streamlit").read_text(encoding="utf-8")
     assert "PYTHONPATH=/app" in content
     assert "HOME=/home/app" in content
+
+
+def test_evaluation_client_submits_reference_and_workspace(monkeypatch):
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return FakeResponse({"evaluation_id": "evaluation-1", "status": "queued"})
+
+    monkeypatch.setattr(api_client.requests, "post", fake_post)
+    result = api_client.create_evaluation(
+        "response-1", "session-123", "Reference answer", "idempotency-1"
+    )
+    assert result["evaluation_id"] == "evaluation-1"
+    assert captured["json"]["reference"] == "Reference answer"
+    assert captured["headers"]["X-Session-ID"] == "session-123"
+    assert captured["headers"]["Idempotency-Key"] == "idempotency-1"
+
+
+def test_indexed_documents_client_loads_workspace_docs(monkeypatch):
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return FakeResponse([{"document_id": "doc-1", "filename": "hindi_doc.pdf"}])
+
+    monkeypatch.setattr(api_client.requests, "get", fake_get)
+    result = api_client.get_indexed_documents("session-123")
+    assert result[0]["filename"] == "hindi_doc.pdf"
+    assert captured["headers"]["X-Session-ID"] == "session-123"
+
+
+def test_chat_ui_exposes_ragas_controls():
+    content = Path("streamlit_app/pages/chat.py").read_text(encoding="utf-8")
+    assert "Evaluate response" in content
+    assert "Optional reference answer" in content
+    assert "Scores are model-based diagnostics" in content
+    assert "_render_chat_message(assistant_message)" in content
+    assert "get_indexed_documents" in content

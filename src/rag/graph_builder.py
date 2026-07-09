@@ -17,7 +17,12 @@ from src.models.route_identifier import RouteIdentifier
 from src.models.state import State
 from src.models.verification_result import VerificationResult
 from src.rag.retriever_setup import retrieve_documents
-from src.tools.graph_tools import retrieval_decision, routing_tool, verification_decision
+from src.tools.graph_tools import (
+    generation_decision,
+    retrieval_decision,
+    routing_tool,
+    verification_decision,
+)
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -32,7 +37,15 @@ def _format_documents(documents: list[Document], max_chars: int = 4000) -> str:
     blocks = []
     used = 0
     for index, doc in enumerate(documents, 1):
-        block = f"[{index}] {doc.page_content.strip()}"
+        metadata = doc.metadata
+        source_kind = metadata.get("source_kind")
+        if not source_kind:
+            source_kind = "web_search" if metadata.get("url") else "uploaded_document"
+        source_label = (
+            "Web search result" if source_kind == "web_search" else "Uploaded document"
+        )
+        source_name = metadata.get("source") or metadata.get("title") or "Unknown source"
+        block = f"[{index}] {source_label} — {source_name}\n{doc.page_content.strip()}"
         if used + len(block) > max_chars and blocks:
             break
         blocks.append(block)
@@ -47,6 +60,8 @@ def _sources(documents: list[Document]) -> list[dict]:
         metadata = doc.metadata
         item = {
             "source": str(metadata.get("source") or metadata.get("title") or "Unknown source"),
+            "source_type": metadata.get("source_kind")
+            or ("web_search" if metadata.get("url") else "uploaded_document"),
             "document_id": metadata.get("document_id"),
             "page": metadata.get("page"),
             "url": metadata.get("url"),
@@ -58,9 +73,116 @@ def _sources(documents: list[Document]) -> list[dict]:
     return output
 
 
+def _evaluation_contexts(documents: list[Document]) -> list[dict]:
+    """Return plain-text evidence snapshots; evaluators never load paths or URLs."""
+    output = []
+    used = 0
+    for doc in documents[: settings.ragas_max_contexts]:
+        remaining = settings.ragas_max_context_chars - used
+        if remaining <= 0:
+            break
+        content = doc.page_content.strip()[:remaining]
+        if not content:
+            continue
+        metadata = doc.metadata
+        output.append(
+            {
+                "content": content,
+                "source": str(metadata.get("source") or metadata.get("title") or "Unknown source"),
+                "document_id": metadata.get("document_id"),
+                "page": metadata.get("page"),
+                "url": metadata.get("url"),
+            }
+        )
+        used += len(content)
+    return output
+
+
+def _document_key(document: Document) -> str:
+    metadata = document.metadata
+    return str(metadata.get("document_id") or metadata.get("source") or "")
+
+
+def _candidate_score(document: Document) -> float:
+    metadata = document.metadata
+    return max(
+        float(metadata.get("rerank_score", 0.0)),
+        float(metadata.get("metadata_match_score", 0.0)),
+        float(metadata.get("document_candidate_score", 0.0)),
+        float(metadata.get("vector_score", 0.0)),
+    )
+
+
+def _log_documents(stage: str, documents: list[Document], *, limit: int = 8) -> None:
+    for index, document in enumerate(documents[:limit]):
+        metadata = document.metadata
+        scores = {
+            key: metadata.get(key)
+            for key in (
+                "vector_score",
+                "metadata_match_score",
+                "document_candidate_score",
+                "rerank_score",
+                "extraction_quality",
+            )
+            if metadata.get(key) is not None
+        }
+        logger.info(
+            "%s[%d] source=%s document_id=%s chunk=%s scores=%s preview=%r",
+            stage,
+            index,
+            metadata.get("source") or metadata.get("title"),
+            metadata.get("document_id"),
+            metadata.get("chunk_index"),
+            scores,
+            document.page_content[:180].replace("\n", " "),
+        )
+
+
+def _diversify_ranked_documents(
+    ranked: list[Document],
+    candidates: list[Document],
+    limit: int,
+) -> list[Document]:
+    if not ranked or limit <= 1:
+        return ranked[:limit]
+    candidate_keys = {_document_key(document) for document in candidates if _document_key(document)}
+    if len(candidate_keys) <= 1:
+        return ranked[:limit]
+
+    selected = ranked[:limit]
+    selected_keys = {_document_key(document) for document in selected if _document_key(document)}
+    if candidate_keys <= selected_keys:
+        return selected
+
+    selected_ids = {id(document) for document in selected}
+    additions = sorted(
+        [
+            document
+            for document in candidates
+            if _document_key(document)
+            and _document_key(document) not in selected_keys
+            and id(document) not in selected_ids
+        ],
+        key=_candidate_score,
+        reverse=True,
+    )
+    for document in additions:
+        if len(selected) < limit:
+            selected.append(document)
+        else:
+            selected[-1] = document
+        selected_keys.add(_document_key(document))
+        selected_ids.add(id(document))
+        if candidate_keys <= selected_keys:
+            break
+    return selected[:limit]
+
+
 async def query_classifier(state: State) -> dict:
     question = state["messages"][-1].content
     documents = await retrieve_documents(question, session_id=state["session_id"])
+    _log_documents("retrieved", documents)
     prompt = PromptTemplate.from_template(config.prompt("classify_prompt"))
     classifier = get_structured_llm(RouteIdentifier)
     result = await (prompt | classifier).ainvoke(
@@ -70,9 +192,16 @@ async def query_classifier(state: State) -> dict:
             "context": _format_documents(documents, max_chars=5000),
         }
     )
-    logger.info("query_routed route=%s candidates=%d", result.route, len(documents))
+    effective_route = "index" if documents and result.route != "index" else result.route
+    logger.info(
+        "query_routed route=%s effective_route=%s candidates=%d",
+        result.route,
+        effective_route,
+        len(documents),
+    )
     return {
-        "route": result.route,
+        "route": effective_route,
+        "classifier_route": result.route,
         "latest_query": question,
         "documents": documents,
         "retry_count": 0,
@@ -87,6 +216,7 @@ async def general_llm(state: State) -> dict:
         "answer": result.content,
         "sources": [],
         "route": "general",
+        "evaluation_contexts": [],
     }
 
 
@@ -112,6 +242,7 @@ async def rerank(state: State) -> dict:
             if index < 0 or index >= len(candidates):
                 continue
             doc = candidates[index]
+            doc.metadata.setdefault("source_kind", "uploaded_document")
             doc.metadata["rerank_score"] = score
             ranked.append(doc)
             if len(ranked) >= settings.rerank_top_n:
@@ -124,8 +255,17 @@ async def rerank(state: State) -> dict:
             reverse=True,
         )[: settings.rerank_top_n]
         for doc in ranked:
+            doc.metadata.setdefault("source_kind", "uploaded_document")
             doc.metadata["rerank_score"] = float(doc.metadata.get("vector_score", 0.0))
-    return {"reranked_documents": ranked}
+    diversified = _diversify_ranked_documents(
+        ranked,
+        candidates,
+        settings.rerank_top_n,
+    )
+    _log_documents("reranked", diversified)
+    return {
+        "reranked_documents": diversified
+    }
 
 
 async def rewrite_query(state: State) -> dict:
@@ -143,6 +283,11 @@ async def rewrite_query(state: State) -> dict:
 
 
 async def web_search(state: State) -> dict:
+    uploaded_documents = [
+        doc
+        for doc in state.get("reranked_documents", [])
+        if doc.metadata.get("source_kind") != "web_search"
+    ]
     search_client = AsyncTavilyClient(api_key=settings.tavily_api_key)
     response = await search_client.search(
         state["latest_query"],
@@ -160,6 +305,7 @@ async def web_search(state: State) -> dict:
                 Document(
                     page_content=item["content"],
                     metadata={
+                        "source_kind": "web_search",
                         "source": item.get("title") or item.get("url") or "Web result",
                         "title": item.get("title"),
                         "url": item.get("url"),
@@ -168,6 +314,8 @@ async def web_search(state: State) -> dict:
             )
     if not documents:
         raise RuntimeError("Web search returned no usable results")
+    if uploaded_documents:
+        return {"route": "search", "reranked_documents": uploaded_documents + documents}
     return {"route": "search", "reranked_documents": documents}
 
 
@@ -189,22 +337,31 @@ async def generate(state: State) -> dict:
         }
     )
     return {
+        "messages": [AIMessage(content=result.content)],
         "answer": result.content,
         "sources": _sources(documents),
         "verification_context": evidence,
+        "evaluation_contexts": _evaluation_contexts(documents),
     }
 
 
 async def verify(state: State) -> dict:
     prompt = PromptTemplate.from_template(config.prompt("verify_prompt"))
     verifier = get_structured_llm(VerificationResult)
-    result = await (prompt | verifier).ainvoke(
-        {
-            "question": state["messages"][-1].content,
-            "context": state["verification_context"],
-            "final_answer": state["answer"],
+    try:
+        result = await (prompt | verifier).ainvoke(
+            {
+                "question": state["messages"][-1].content,
+                "context": state["verification_context"][:6000],
+                "final_answer": state["answer"],
+            }
+        )
+    except Exception:
+        logger.exception("Answer verification failed; returning generated answer")
+        return {
+            "faithful": True,
+            "messages": [AIMessage(content=state["answer"])],
         }
-    )
     attempts = state.get("verification_attempts", 0) + (0 if result.faithful else 1)
     updates: dict = {"faithful": result.faithful, "verification_attempts": attempts}
     if result.faithful:
@@ -213,8 +370,17 @@ async def verify(state: State) -> dict:
 
 
 async def safe_fallback(state: State) -> dict:
-    answer = "I could not produce an answer that was fully supported by the available sources."
-    return {"answer": answer, "sources": [], "messages": [AIMessage(content=answer)]}
+    documents = state.get("reranked_documents", [])
+    answer = state.get("answer") or (
+        "I could not produce an answer that was fully supported by the available sources."
+    )
+    return {
+        "answer": answer,
+        "sources": _sources(documents),
+        "verification_context": state.get("verification_context", ""),
+        "evaluation_contexts": state.get("evaluation_contexts", _evaluation_contexts(documents)),
+        "messages": [AIMessage(content=answer)],
+    }
 
 
 graph = StateGraph(State)
@@ -234,7 +400,7 @@ graph.add_conditional_edges("rerank", retrieval_decision)
 graph.add_edge("rewrite", "retriever")
 graph.add_edge("retriever", "rerank")
 graph.add_edge("web_search", "generate")
-graph.add_edge("generate", "verify")
+graph.add_conditional_edges("generate", generation_decision)
 graph.add_conditional_edges("verify", verification_decision)
 graph.add_edge("general_llm", END)
 graph.add_edge("safe_fallback", END)

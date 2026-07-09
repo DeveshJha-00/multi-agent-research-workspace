@@ -4,7 +4,7 @@ from pydantic import ValidationError
 
 from src.models.query_request import QueryRequest
 from src.models.route_identifier import RouteIdentifier
-from src.tools.graph_tools import retrieval_decision, routing_tool
+from src.tools.graph_tools import generation_decision, retrieval_decision, routing_tool
 
 
 def test_query_request_strips_text_and_validates_session():
@@ -32,6 +32,35 @@ def test_retrieval_decision_generates_for_relevant_documents():
     assert retrieval_decision({"reranked_documents": [document], "retry_count": 0}) == "generate"
 
 
+def test_retrieval_decision_uses_documents_before_rewrite_or_search():
+    document = Document(page_content="answer", metadata={"rerank_score": 0.2})
+    assert retrieval_decision({"reranked_documents": [document], "retry_count": 0}) == "generate"
+
+
+def test_retrieval_decision_still_uses_extremely_weak_document_evidence():
+    document = Document(page_content="answer", metadata={"rerank_score": 0.0})
+    assert retrieval_decision({"reranked_documents": [document], "retry_count": 0}) == "generate"
+
+
+def test_retrieval_decision_hybridizes_when_classifier_requested_search():
+    document = Document(page_content="answer", metadata={"rerank_score": 0.95})
+    assert (
+        retrieval_decision(
+            {
+                "classifier_route": "search",
+                "reranked_documents": [document],
+                "retry_count": 0,
+            }
+        )
+        == "web_search"
+    )
+
+
 def test_retrieval_decision_is_bounded():
     assert retrieval_decision({"reranked_documents": [], "retry_count": 0}) == "rewrite"
     assert retrieval_decision({"reranked_documents": [], "retry_count": 1}) == "web_search"
+
+
+def test_index_generation_skips_extra_verification_call():
+    assert generation_decision({"route": "index"}) == "__end__"
+    assert generation_decision({"route": "search"}) == "verify"

@@ -36,6 +36,14 @@ prompts:
     Answer the question using only the numbered evidence below.
     If evidence is incomplete, state the limitation instead of inventing details.
     Cite supporting evidence inline as [1], [2], etc. Do not cite unsupported claims.
+    Uploaded-document evidence is higher priority than web-search evidence.
+    When both uploaded-document and web-search evidence are present, clearly say which part came from
+    the uploaded/indexed document and which part came from web search.
+    Preserve exact names, institution names, degree labels, dates, skills, and numbers from the evidence.
+    Do not normalize spelling or expand abbreviations unless the evidence explicitly gives the expansion.
+    For resumes/CVs, extract only stated education, skills, projects, and achievements. For example,
+    do not interpret "M.S. Ramaiah Institute of Technology" as a separate Master of Science degree.
+    If a field is ambiguous, say it is ambiguous and quote the exact supporting text.
     Give a direct, readable answer.
 
     Question: {question}

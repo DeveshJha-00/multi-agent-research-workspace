@@ -59,14 +59,237 @@ async def test_retrieval_filters_by_session(monkeypatch):
             ]
         )
 
+    async def fake_scroll(**kwargs):
+        return [], None
+
     monkeypatch.setattr(retriever_setup, "get_embeddings", lambda: FakeEmbeddings())
     monkeypatch.setattr(retriever_setup.client, "query_points", fake_query_points)
+    monkeypatch.setattr(retriever_setup.client, "scroll", fake_scroll)
     documents = await retriever_setup.retrieve_documents("question", session_id="session-123")
 
     condition = captured["query_filter"].must[0]
     assert condition.key == "session_id"
     assert condition.match.value == "session-123"
     assert documents[0].metadata["vector_score"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_retrieval_adds_metadata_matches_for_named_documents(monkeypatch):
+    async def fake_query_points(**kwargs):
+        return SimpleNamespace(points=[])
+
+    async def fake_scroll(**kwargs):
+        return [
+            SimpleNamespace(
+                payload={
+                    "content": "This is a Hindi policy document.",
+                    "source": "hindi_doc.pdf",
+                    "description": "hindi_document",
+                    "document_id": "document-hindi",
+                    "chunk_index": 0,
+                }
+            )
+        ], None
+
+    monkeypatch.setattr(retriever_setup, "get_embeddings", lambda: FakeEmbeddings())
+    monkeypatch.setattr(retriever_setup.client, "query_points", fake_query_points)
+    monkeypatch.setattr(retriever_setup.client, "scroll", fake_scroll)
+
+    documents = await retriever_setup.retrieve_documents(
+        "what is the uploaded hindi document about?",
+        session_id="session-123",
+    )
+    assert documents[0].metadata["source"] == "hindi_doc.pdf"
+    assert documents[0].metadata["metadata_match_score"] > 0
+
+
+@pytest.mark.asyncio
+async def test_retrieval_keeps_relevant_candidates_from_multiple_documents(monkeypatch):
+    async def fake_query_points(**kwargs):
+        must = kwargs["query_filter"].must
+        document_filter = next(
+            (condition for condition in must if condition.key == "document_id"),
+            None,
+        )
+        if document_filter and document_filter.match.value == "document-hindi":
+            return SimpleNamespace(
+                points=[
+                    SimpleNamespace(
+                        payload={
+                            "content": "hindi document agriculture policy details",
+                            "source": "hindi_doc.pdf",
+                            "description": "hindi_document",
+                            "document_id": "document-hindi",
+                            "chunk_index": 0,
+                        },
+                        score=0.7,
+                    )
+                ]
+            )
+        return SimpleNamespace(
+            points=[
+                SimpleNamespace(
+                    payload={
+                        "content": "resume skills education projects",
+                        "source": "resume.pdf",
+                        "description": "candidate resume",
+                        "document_id": "document-resume",
+                        "chunk_index": index,
+                    },
+                    score=0.8 - index * 0.01,
+                )
+                for index in range(6)
+            ]
+        )
+
+    async def fake_scroll(**kwargs):
+        return [
+            SimpleNamespace(payload={"document_id": "document-resume"}),
+            SimpleNamespace(payload={"document_id": "document-hindi"}),
+        ], None
+
+    monkeypatch.setattr(retriever_setup, "get_embeddings", lambda: FakeEmbeddings())
+    monkeypatch.setattr(retriever_setup.client, "query_points", fake_query_points)
+    monkeypatch.setattr(retriever_setup.client, "scroll", fake_scroll)
+
+    documents = await retriever_setup.retrieve_documents(
+        "summarize the agriculture policy",
+        session_id="session-123",
+        limit=6,
+    )
+    assert {document.metadata["document_id"] for document in documents} == {
+        "document-resume",
+        "document-hindi",
+    }
+
+
+@pytest.mark.asyncio
+async def test_retrieval_filters_binary_and_prioritizes_relevant_resume_chunks(monkeypatch):
+    async def fake_query_points(**kwargs):
+        must = kwargs["query_filter"].must
+        document_filter = next(
+            (condition for condition in must if condition.key == "document_id"),
+            None,
+        )
+        if document_filter and document_filter.match.value == "document-hindi":
+            return SimpleNamespace(
+                points=[
+                    SimpleNamespace(
+                        payload={
+                            "content": "PK\x03\x04\ufffd\ufffd\ufffd\x00\x01garbage",
+                            "source": "hindi_doc.pdf",
+                            "description": "hindi document",
+                            "document_id": "document-hindi",
+                            "chunk_index": 0,
+                        },
+                        score=0.7,
+                    )
+                ]
+            )
+        return SimpleNamespace(
+            points=[
+                SimpleNamespace(
+                    payload={
+                        "content": (
+                            "TECHNICAL SKILLS AND COURSEWORK\n"
+                            "Languages: Java, Python, JavaScript\n"
+                            "Databases: MongoDB, Redis"
+                        ),
+                        "source": "resume.pdf",
+                        "description": "candidate resume",
+                        "document_id": "document-resume",
+                        "chunk_index": 0,
+                        "extraction_quality": 0.9,
+                    },
+                    score=0.8,
+                )
+            ]
+        )
+
+    async def fake_scroll(**kwargs):
+        return [
+            SimpleNamespace(
+                payload={
+                    "content": (
+                        "TECHNICAL SKILLS AND COURSEWORK\n"
+                        "Languages: Java, Python, JavaScript\n"
+                        "Databases: MongoDB, Redis"
+                    ),
+                    "source": "resume.pdf",
+                    "description": "candidate resume",
+                    "document_id": "document-resume",
+                    "chunk_index": 0,
+                    "extraction_quality": 0.9,
+                }
+            ),
+            SimpleNamespace(
+                payload={
+                    "content": "PK\x03\x04\ufffd\ufffd\ufffd\x00\x01garbage",
+                    "source": "hindi_doc.pdf",
+                    "description": "hindi document",
+                    "document_id": "document-hindi",
+                    "chunk_index": 0,
+                }
+            ),
+        ], None
+
+    monkeypatch.setattr(retriever_setup, "get_embeddings", lambda: FakeEmbeddings())
+    monkeypatch.setattr(retriever_setup.client, "query_points", fake_query_points)
+    monkeypatch.setattr(retriever_setup.client, "scroll", fake_scroll)
+
+    documents = await retriever_setup.retrieve_documents(
+        "List the technical skills the candidate has",
+        session_id="session-123",
+        limit=6,
+    )
+
+    assert documents
+    assert documents[0].metadata["document_id"] == "document-resume"
+    assert "TECHNICAL SKILLS" in documents[0].page_content
+    assert all(document.metadata["document_id"] != "document-hindi" for document in documents)
+
+
+@pytest.mark.asyncio
+async def test_list_documents_groups_chunks_by_document(monkeypatch):
+    async def fake_scroll(**kwargs):
+        return [
+            SimpleNamespace(
+                payload={
+                    "source": "hindi_doc.pdf",
+                    "description": "hindi_document",
+                    "document_id": "document-hindi",
+                    "chunk_index": 0,
+                    "parser_provider": "local",
+                    "detected_language": "hi-IN",
+                    "script": "Deva",
+                }
+            ),
+            SimpleNamespace(
+                payload={
+                    "source": "hindi_doc.pdf",
+                    "description": "hindi_document",
+                    "document_id": "document-hindi",
+                    "chunk_index": 1,
+                    "parser_provider": "local",
+                    "detected_language": "hi-IN",
+                    "script": "Deva",
+                }
+            ),
+        ], None
+
+    monkeypatch.setattr(retriever_setup.client, "scroll", fake_scroll)
+    documents = await retriever_setup.list_documents(session_id="session-123")
+    assert documents == [
+        {
+            "document_id": "document-hindi",
+            "filename": "hindi_doc.pdf",
+            "description": "hindi_document",
+            "chunks_indexed": 2,
+            "parser_provider": "local",
+            "detected_language": "hi-IN",
+            "script": "Deva",
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -17,11 +17,14 @@ from src.core.logger import configure_logging, logger
 from src.db.artifact_store import initialize_artifact_store
 from src.db.checkpoint_store import initialize_checkpoint_store
 from src.db.dataset_store import initialize_dataset_store
+from src.db.evaluation_job_store import initialize_evaluation_job_store
 from src.db.evidence_store import initialize_evidence_store
 from src.db.mongo_client import close_mongodb, initialize_mongodb, mongodb_ready
+from src.db.rag_response_store import initialize_rag_response_store
 from src.db.repository_analysis_store import initialize_repository_analysis_store
 from src.db.repository_store import initialize_repository_store
 from src.db.research_job_store import initialize_research_job_store
+from src.evaluation.job_runner import evaluation_job_runner
 from src.orchestration.job_runner import research_job_runner
 from src.rag.retriever_setup import close_qdrant, initialize_qdrant, qdrant_ready
 
@@ -42,11 +45,15 @@ async def lifespan(app: FastAPI):
         initialize_research_job_store(),
         initialize_repository_store(),
         initialize_repository_analysis_store(),
+        initialize_rag_response_store(),
+        initialize_evaluation_job_store(),
     )
     research_job_runner.start()
+    evaluation_job_runner.start()
     logger.info("Application dependencies initialized")
     yield
     await research_job_runner.stop()
+    await evaluation_job_runner.stop()
     await close_qdrant()
     close_mongodb()
 

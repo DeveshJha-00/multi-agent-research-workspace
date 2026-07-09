@@ -39,7 +39,69 @@ def query_backend(query: str, session_id: str) -> dict:
             "content": _error(exc, "The backend request failed."),
             "route": "error",
             "sources": [],
+            "response_id": None,
         }
+
+
+def create_evaluation(
+    response_id: str,
+    session_id: str,
+    reference: str | None,
+    idempotency_key: str,
+) -> dict:
+    try:
+        response = requests.post(
+            f"{PYTHON_BASE_URL}/rag/evaluations",
+            json={"response_id": response_id, "reference": reference or None},
+            headers={"X-Session-ID": session_id, "Idempotency-Key": idempotency_key},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        return {"error": _error(exc, "Unable to start response evaluation")}
+
+
+def get_evaluation(evaluation_id: str, session_id: str) -> dict:
+    try:
+        response = requests.get(
+            f"{PYTHON_BASE_URL}/rag/evaluations/{evaluation_id}",
+            headers={"X-Session-ID": session_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        return {"error": _error(exc, "Unable to load response evaluation")}
+
+
+def get_evaluations(response_id: str, session_id: str) -> list[dict]:
+    try:
+        response = requests.get(
+            f"{PYTHON_BASE_URL}/rag/evaluations",
+            params={"response_id": response_id},
+            headers={"X-Session-ID": session_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        _error(exc, "Unable to load response evaluations")
+    return []
+
+
+def get_indexed_documents(session_id: str) -> list[dict]:
+    try:
+        response = requests.get(
+            f"{PYTHON_BASE_URL}/rag/documents",
+            headers={"X-Session-ID": session_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        _error(exc, "Unable to load indexed documents")
+    return []
 
 
 def document_upload_rag(file, description: str, session_id: str) -> dict:

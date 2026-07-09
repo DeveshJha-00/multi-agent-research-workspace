@@ -22,11 +22,31 @@ Each Chat question selects exactly one route:
 - `search`: search the current web with Tavily and produce a sourced answer.
 
 The indexed-document route performs vector retrieval, local cross-encoder reranking, grounded answer
-generation, and faithfulness verification. If retrieval is weak, it rewrites the query once and can
-fall back to web search.
+generation, and faithfulness verification. Uploaded document chunks are prioritized when they are
+available; reranking orders evidence but does not veto document answers.
 
 Chat intentionally uses one route per question. A task that must combine uploaded documents with web
 sources or datasets belongs in the Research workspace.
+
+### RAGAS response evaluation
+
+Every successful Chat answer receives a `response_id` and an immutable, bounded evaluation snapshot
+in MongoDB. Evaluation is opt-in: expand **RAGAS evaluation** below an answer and click **Evaluate
+response**. The answer is returned before evaluation begins, and evaluator failures never alter it.
+
+Reference-free evaluation provides:
+
+- answer relevancy for every Chat route;
+- faithfulness and context utilization for document and web-grounded routes.
+
+Supplying an optional reference answer also enables factual correctness and semantic similarity, plus
+context precision and recall when retrieved passages exist. Scores are diagnostics rather than
+acceptance thresholds. Jobs are asynchronous, leased, session-isolated, and checkpointed per metric,
+so a restarted worker skips metrics it already stored.
+
+RAGAS uses Groq as its text judge and the existing local FastEmbed model for semantic metrics. Usage
+telemetry is disabled. The integration never imports multimodal metrics or asks RAGAS to fetch a URL
+or local path; only already-retrieved plain text is passed to it.
 
 ### Multi-agent research
 
@@ -121,6 +141,12 @@ flowchart LR
     WEB --> GENERATE
     GENERATE --> VERIFY[Faithfulness verification]
 
+    API --> SNAPSHOTS[(Chat response snapshots)]
+    SNAPSHOTS --> EVALJOBS[(Durable evaluation jobs)]
+    EVALJOBS --> RAGAS[RAGAS text metrics]
+    RAGAS --> GROQJUDGE[Groq judge]
+    RAGAS --> FASTEMBED[Local FastEmbed]
+
     API --> JOBS[(Durable research jobs)]
     JOBS --> WORKER[Leased async worker]
     WORKER --> RESEARCH[Research orchestration graph]
@@ -146,25 +172,38 @@ flowchart LR
 ### Document ingestion
 
 1. FastAPI validates the file, workspace ID, description, type, and size.
-2. PDF pages or UTF-8 text are loaded.
-3. Text is split into overlapping chunks.
-4. FastEmbed creates 384-dimensional vectors locally.
-5. Chunks and metadata are upserted into one Qdrant collection.
-6. `session_id` payload filtering isolates retrieval between workspaces.
+2. The language-aware parser chooses local extraction for English/Latin documents by default.
+3. Non-English/Indic documents can use Sarvam Document Digitization when configured; otherwise the
+   app falls back to local parsing with a warning.
+4. Text is split into overlapping chunks.
+5. FastEmbed creates 384-dimensional vectors locally.
+6. Chunks and metadata are upserted into one Qdrant collection.
+7. `session_id` payload filtering isolates retrieval between workspaces.
 
-Uploads are additive. Qdrant payloads preserve source, document ID, page, and chunk metadata. The
-active backend is Qdrant; the old in-process FAISS implementation has been removed.
+Uploads are additive. Qdrant payloads preserve source, document ID, page, parser provider, detected
+language/script, and chunk metadata. The active backend is Qdrant; the old in-process FAISS
+implementation has been removed.
+
+Retrieval is multi-document within a workspace. It combines vector search with filename/description
+metadata matching, so questions like "what is the Hindi document about?" can find a document named or
+described as `hindi_document` even when cross-language embeddings are weak.
 
 ### Chat query flow
 
 1. Load bounded history from MongoDB.
 2. Retrieve candidate workspace chunks for classifier context.
 3. Classify the question as `index`, `general`, or `search`.
-4. For `index`, retrieve up to `RETRIEVAL_TOP_K`, rerank locally, and retain `RERANK_TOP_N`.
-5. If relevance is insufficient, rewrite once and then optionally use web search.
-6. Generate a grounded answer and sources.
-7. Verify faithfulness; regenerate once or return a safe fallback.
-8. Persist the user and assistant messages in MongoDB.
+4. If uploaded-document chunks are available, prefer the `index` path even when the classifier is unsure.
+5. For `index`, retrieve up to `RETRIEVAL_TOP_K`, rerank locally for ordering/confidence, and retain
+   `RERANK_TOP_N`.
+6. Reranking no longer blocks document answers. If the classifier determines that a query also needs
+   current/external information, the graph creates a hybrid answer that uses uploaded-document evidence
+   first and clearly labels any added web-search evidence.
+7. Generate a grounded answer and sources.
+8. Verify faithfulness; regenerate once or return a safe fallback.
+9. Persist the user and assistant messages in MongoDB.
+10. Persist a bounded response/evidence snapshot and return its `response_id`. Optional RAGAS work is
+   queued only when the user requests it.
 
 ### Research flow
 
@@ -198,6 +237,7 @@ surrounds the specialist worker as one graph node.
 | MongoDB | Application storage | Flexible storage for history, datasets, repositories, evidence, and artifacts |
 | Tavily | Web search | Search results with source titles, URLs, snippets, and scores |
 | pandas/Matplotlib | Data agent | Safe tabular calculations and server-side PNG charts |
+| RAGAS 0.4.3 | Chat evaluation | Reference-free and golden-answer quality diagnostics |
 | Docker Compose | Local stack | Reproducible API, UI, MongoDB, Qdrant, and persistent volumes |
 
 Important trade-offs:
@@ -215,6 +255,8 @@ Important trade-offs:
   dedicated queue would offer higher throughput and scheduling controls at larger scale.
 - SSE is one-way and ideal for activity feeds; WebSockets would be preferable for highly interactive,
   bidirectional control.
+- RAGAS metrics provide structured diagnostics but consume additional Groq calls and can inherit judge
+  bias. They run on demand with concurrency one and never gate responses.
 
 ## Project structure
 
@@ -227,6 +269,7 @@ Important trade-offs:
 |-- Dockerfile                   FastAPI image
 |-- Dockerfile.streamlit         Streamlit image
 |-- requirements*.txt            Backend, frontend, and development dependencies
+|-- evals/rag_chat.jsonl         Reference-based Chat benchmark cases
 |-- sample-policy.txt            Document test fixture
 |-- sales.csv                    Dataset test fixture
 |-- src/
@@ -295,6 +338,47 @@ RERANKER_CACHE_DIR=/models/flashrank
 `GROQ_REQUESTS_PER_SECOND=0.2` deliberately spaces model calls to reduce free-tier bursts. The model
 cache is mounted at `/models` in Docker.
 
+### RAGAS evaluation settings
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `RAGAS_ENABLED` | `true` | Enable evaluation submission and its worker |
+| `RAGAS_DO_NOT_TRACK` | `true` | Disable RAGAS anonymous usage telemetry |
+| `RAGAS_JUDGE_MODEL` | `openai/gpt-oss-20b` | Groq model used as the evaluation judge |
+| `RAGAS_JUDGE_BASE_URL` | `https://api.groq.com/openai/v1` | Groq OpenAI-compatible API endpoint |
+| `RAGAS_MAX_CONTEXTS` | `3` | Maximum retrieved passages evaluated per response |
+| `RAGAS_MAX_CONTEXT_CHARS` | `12000` | Total stored/evaluated passage characters |
+| `EVALUATION_WORKER_POLL_SECONDS` | `1.0` | Idle durable-queue polling interval |
+| `EVALUATION_JOB_LEASE_SECONDS` | `600` | Crash-recovery ownership window |
+| `EVALUATION_JOB_MAX_ATTEMPTS` | `3` | Maximum automatic recovery claims |
+| `EVALUATION_METRIC_DELAY_SECONDS` | `1.0` | Pause between metrics to reduce API bursts |
+
+RAGAS 0.4.3 is pinned for API stability. Its published advisory affects multimodal URL/file loading,
+which this text-only integration does not import or call. User-controlled paths and URLs are never
+passed to RAGAS loaders. Upgrade the pin when a compatible patched release is available.
+
+### Multilingual and Sarvam settings
+
+Sarvam is optional. In `auto` mode, English/Latin documents use local extraction; non-English/Indic
+documents use Sarvam only when `SARVAM_API_KEY` is configured.
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `SARVAM_API_KEY` | empty | Optional Sarvam API key |
+| `DOCUMENT_PARSER_PROVIDER` | `auto` | `auto`, `local`, or `sarvam` |
+| `ENABLE_MULTILINGUAL_DOCS` | `true` | Permit Sarvam routing for detected Indic documents |
+| `SARVAM_BASE_URL` | `https://api.sarvam.ai` | Sarvam API base URL |
+| `SARVAM_DOCUMENT_LANGUAGE` | `auto` | Sarvam document language; `auto` currently submits `hi-IN` |
+| `SARVAM_DOCUMENT_OUTPUT_FORMAT` | `md` | Sarvam output format |
+| `SARVAM_MAX_PAGES_PER_JOB` | `10` | Sarvam document digitization page cap |
+| `SARVAM_JOB_POLL_SECONDS` | `2.0` | Sarvam job polling interval |
+| `SARVAM_JOB_TIMEOUT_SECONDS` | `180` | Sarvam parsing timeout |
+| `DEFAULT_UI_LANGUAGE` | `en-IN` | Future multilingual UI default |
+| `DEFAULT_ANSWER_LANGUAGE` | `auto` | Future answer-language policy |
+
+Speech-to-text and text-to-speech service boundaries are present for future Sarvam Saaras/Bulbul UI
+work, but the current chat UI does not yet record audio or synthesize answer audio.
+
 ### Storage settings
 
 ```env
@@ -314,7 +398,7 @@ FastEmbed vectors at an older 1536-dimensional collection.
 | `RETRIEVAL_TOP_K` | `12` | Initial Qdrant candidates |
 | `RERANK_TOP_N` | `5` | Documents retained after reranking |
 | `RETRIEVAL_SCORE_THRESHOLD` | `0.2` | Qdrant candidate threshold |
-| `RERANK_RELEVANCE_THRESHOLD` | `0.45` | Minimum reranked score used for generation |
+| `RERANK_RELEVANCE_THRESHOLD` | `0.45` | Recorded high-confidence rerank reference |
 | `MAX_RETRIEVAL_RETRIES` | `1` | Query rewrite attempts |
 | `CHUNK_SIZE` | `1000` | Document chunk characters |
 | `CHUNK_OVERLAP` | `150` | Overlap between chunks |
@@ -478,6 +562,9 @@ streamlit run streamlit_app/home.py --server.port 8501
 | `GET` | `/health/ready` | Database and credential readiness |
 | `POST` | `/rag/documents/upload` | Index PDF/TXT into a workspace |
 | `POST` | `/rag/query` | Run adaptive Chat |
+| `POST` | `/rag/evaluations` | Queue an optional response evaluation |
+| `GET` | `/rag/evaluations` | List evaluations, optionally by `response_id` |
+| `GET` | `/rag/evaluations/{evaluation_id}` | Read durable status and metric results |
 | `DELETE` | `/rag/documents/{document_id}` | Delete one workspace document |
 | `DELETE` | `/rag/history` | Clear workspace chat history |
 | `POST` | `/agents/datasets/upload` | Store CSV/JSON/XLSX |
@@ -502,12 +589,50 @@ $body = @{
     session_id = "demo-session-001"
 } | ConvertTo-Json
 
-Invoke-RestMethod `
+$response = Invoke-RestMethod `
     -Method Post `
     -Uri http://localhost:8000/rag/query `
     -ContentType application/json `
     -Body $body
 ```
+
+The response includes `response_id`. Evaluate it without a reference answer:
+
+```powershell
+$evaluationBody = @{
+    response_id = $response.response_id
+} | ConvertTo-Json
+
+$evaluation = Invoke-RestMethod `
+    -Method Post `
+    -Uri http://localhost:8000/rag/evaluations `
+    -Headers @{
+        "X-Session-ID" = "demo-session-001"
+        "Idempotency-Key" = [guid]::NewGuid().ToString()
+    } `
+    -ContentType application/json `
+    -Body $evaluationBody
+
+Invoke-RestMethod `
+    -Uri "http://localhost:8000/rag/evaluations/$($evaluation.evaluation_id)" `
+    -Headers @{ "X-Session-ID" = "demo-session-001" }
+```
+
+Include `reference` in the submission body to enable the reference-based metrics. Groq free-tier
+limits can make evaluation substantially slower than answer generation; partial metric failures are
+shown independently and do not invalidate successful scores.
+
+Run the bundled reference-based benchmark against an already running stack:
+
+```powershell
+python -m src.evaluation.benchmark `
+    --base-url http://localhost:8000 `
+    --dataset evals/rag_chat.jsonl
+```
+
+The command creates a unique workspace, indexes `sample-policy.txt`, evaluates three golden cases,
+and writes ignored JSON/CSV reports under `evals/results/`. It reports route accuracy, response and
+evaluation durations, failures, and per-metric averages without enforcing thresholds.
 
 ### Research example
 
@@ -699,8 +824,8 @@ ruff format --check src tests streamlit_app
 ```
 
 The test suite covers configuration, upload validation, Qdrant isolation, routing, model adapters,
-prompt budgets, frontend error handling, specialist orchestration, durability contracts, data
-analysis, and non-empty deliverables.
+RAGAS metric selection and durable evaluation resume, prompt budgets, frontend error handling,
+specialist orchestration, durability contracts, data analysis, and non-empty deliverables.
 
 Development conventions remain in [CODE_STYLE_GUIDE.md](CODE_STYLE_GUIDE.md).
 
