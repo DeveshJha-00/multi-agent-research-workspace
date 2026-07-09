@@ -1,5 +1,6 @@
 """Text-only RAGAS metrics backed by Groq and local FastEmbed embeddings."""
 
+import json
 from functools import lru_cache
 from math import sqrt
 from typing import Any
@@ -144,6 +145,11 @@ async def score_metric(
             raise ValueError(f"Unsupported evaluation metric: {metric_name}")
     except Exception as exc:
         if _is_structured_json_failure(exc):
+            recovered = await _try_direct_json_judge_recovery(
+                metric_name, snapshot, reference, contexts, exc
+            )
+            if recovered is not None:
+                return recovered
             return await _local_structured_output_fallback(metric_name, snapshot, reference, contexts)
         raise
     value = float(result.value)
@@ -158,6 +164,149 @@ def _is_structured_json_failure(exc: Exception) -> bool:
         or "failed to validate json" in message
         or "instructorretryexception" in exc.__class__.__name__.lower()
     )
+
+
+@lru_cache
+def get_direct_json_judge_client() -> AsyncOpenAI:
+    """Return a plain OpenAI-compatible Groq client for schema-recovery judge calls."""
+    return AsyncOpenAI(
+        api_key=settings.groq_api_key,
+        base_url=settings.ragas_judge_base_url,
+        timeout=45.0,
+        max_retries=0,
+    )
+
+
+def _json_recovery_supported(metric_name: str) -> bool:
+    return metric_name in {"faithfulness", "context_utilization"}
+
+
+def _truncate_for_judge(text: str, limit: int = 8000) -> str:
+    stripped = str(text or "").strip()
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[:limit] + "\n...[truncated]"
+
+
+def _json_recovery_prompt(
+    metric_name: str,
+    snapshot: dict,
+    contexts: list[str],
+) -> str:
+    joined_contexts = "\n\n--- CONTEXT BREAK ---\n\n".join(
+        _truncate_for_judge(context, 3000) for context in contexts
+    )
+    question = _truncate_for_judge(snapshot["question"], 1200)
+    answer = _truncate_for_judge(snapshot["answer"], 3500)
+    if metric_name == "faithfulness":
+        rubric = (
+            "Evaluate faithfulness. Score 1.0 when every factual claim in the answer "
+            "is directly supported by the retrieved contexts. Penalize unsupported, "
+            "contradicted, or invented details. If the answer is mostly supported but "
+            "has minor unsupported wording, use a score between 0.6 and 0.9."
+        )
+    else:
+        rubric = (
+            "Evaluate context utilization. Score 1.0 when the retrieved contexts are "
+            "clearly useful and sufficient for producing the answer. Penalize contexts "
+            "that are irrelevant, unused, or weakly connected to the answer."
+        )
+    return f"""
+{rubric}
+
+Return one valid JSON object only, with exactly these keys:
+{{"score": <number from 0 to 1>, "reason": "<one concise sentence>"}}
+
+Do not include markdown, XML tags, code fences, or extra keys.
+
+Question:
+{question}
+
+Answer:
+{answer}
+
+Retrieved contexts:
+{joined_contexts}
+""".strip()
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    cleaned = str(text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        parsed = json.loads(cleaned[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("Judge JSON response must be an object")
+    return parsed
+
+
+def _coerce_score(value: Any) -> float:
+    score = float(value)
+    if score != score:
+        raise ValueError("Judge score cannot be NaN")
+    return max(0.0, min(1.0, score))
+
+
+async def _try_direct_json_judge_recovery(
+    metric_name: str,
+    snapshot: dict,
+    reference: str | None,
+    contexts: list[str],
+    original_error: Exception,
+) -> dict[str, Any] | None:
+    """Recover RAGAS schema failures with a simpler judge-backed JSON contract.
+
+    RAGAS 0.4.x uses Instructor/Pydantic schemas internally. Some Groq-hosted
+    models occasionally miss those richer schemas for multi-step metrics even
+    when the same model can return a simple JSON object. This keeps the metric
+    judge-backed before falling all the way back to local embedding similarity.
+    """
+    del reference
+    if not _json_recovery_supported(metric_name) or not contexts:
+        return None
+    try:
+        response = await get_direct_json_judge_client().chat.completions.create(
+            model=settings.effective_ragas_judge_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict evaluation judge. You only return valid JSON "
+                        "that matches the requested shape."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": _json_recovery_prompt(metric_name, snapshot, contexts),
+                },
+            ],
+            temperature=0,
+            max_tokens=min(settings.groq_max_output_tokens, 700),
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content or ""
+        parsed = _extract_json_object(content)
+        score = _coerce_score(parsed["score"])
+        reason = str(parsed.get("reason") or "Recovered with a direct JSON judge call.")
+        return {
+            "score": score,
+            "reason": (
+                f"{reason} RAGAS structured-output validation failed for this metric, "
+                "so the project recovered with a simpler Groq JSON judge prompt instead "
+                "of using the local embedding fallback."
+            ),
+        }
+    except Exception:
+        return None
 
 
 def _cosine(left: list[float], right: list[float]) -> float:

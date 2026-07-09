@@ -211,10 +211,43 @@ async def test_metric_scoring_returns_value_and_reason(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_metric_scoring_falls_back_on_structured_json_validation(monkeypatch):
+async def test_metric_scoring_recovers_json_validation_with_direct_judge(monkeypatch):
     class BrokenMetric:
         async def ascore(self, **kwargs):
             raise RuntimeError("Error code: 400 - json_validate_failed")
+
+    async def fake_recovery(metric_name, snapshot, reference, contexts, original_error):
+        assert metric_name == "faithfulness"
+        assert contexts == ["A"]
+        assert "json_validate_failed" in str(original_error)
+        return {"score": 0.82, "reason": "Recovered with direct judge."}
+
+    monkeypatch.setattr(
+        ragas_evaluator,
+        "get_metrics",
+        lambda: {"faithfulness": BrokenMetric()},
+    )
+    monkeypatch.setattr(
+        ragas_evaluator,
+        "_try_direct_json_judge_recovery",
+        fake_recovery,
+    )
+    result = await ragas_evaluator.score_metric(
+        "faithfulness",
+        {"question": "Q", "answer": "A", "contexts": [{"content": "A"}]},
+        None,
+    )
+    assert result == {"score": 0.82, "reason": "Recovered with direct judge."}
+
+
+@pytest.mark.asyncio
+async def test_metric_scoring_uses_local_fallback_after_judge_recovery_fails(monkeypatch):
+    class BrokenMetric:
+        async def ascore(self, **kwargs):
+            raise RuntimeError("Error code: 400 - json_validate_failed")
+
+    async def fake_no_recovery(*args, **kwargs):
+        return None
 
     class FakeEmbeddings:
         async def aembed_query(self, text):
@@ -225,6 +258,11 @@ async def test_metric_scoring_falls_back_on_structured_json_validation(monkeypat
 
     monkeypatch.setattr(
         ragas_evaluator, "get_metrics", lambda: {"faithfulness": BrokenMetric()}
+    )
+    monkeypatch.setattr(
+        ragas_evaluator,
+        "_try_direct_json_judge_recovery",
+        fake_no_recovery,
     )
     monkeypatch.setattr(ragas_evaluator, "get_embeddings", lambda: FakeEmbeddings())
     result = await ragas_evaluator.score_metric(
