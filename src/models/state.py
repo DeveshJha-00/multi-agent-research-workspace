@@ -13,6 +13,8 @@ class State(TypedDict, total=False):
     route: Literal["index", "general", "search"]
     classifier_route: Literal["index", "general", "search"]
     latest_query: str
+    query_language: str
+    answer_language: str
     documents: list[Document]
     reranked_documents: list[Document]
     retry_count: int

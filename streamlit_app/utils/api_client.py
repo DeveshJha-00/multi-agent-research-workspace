@@ -25,11 +25,21 @@ def _error(exc: requests.RequestException, fallback: str) -> str:
     return fallback
 
 
-def query_backend(query: str, session_id: str) -> dict:
+def query_backend(
+    query: str,
+    session_id: str,
+    query_language: str = "auto",
+    answer_language: str = "auto",
+) -> dict:
     try:
         response = requests.post(
             f"{PYTHON_BASE_URL}/rag/query",
-            json={"query": query, "session_id": session_id},
+            json={
+                "query": query,
+                "session_id": session_id,
+                "query_language": query_language,
+                "answer_language": answer_language,
+            },
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
@@ -40,7 +50,60 @@ def query_backend(query: str, session_id: str) -> dict:
             "route": "error",
             "sources": [],
             "response_id": None,
+            "query_language": query_language,
+            "answer_language": answer_language,
         }
+
+
+def transcribe_speech(file, session_id: str) -> dict:
+    try:
+        response = requests.post(
+            f"{PYTHON_BASE_URL}/rag/speech/transcribe",
+            files={"file": (file.name, file.getvalue(), file.type or "audio/wav")},
+            headers={"X-Session-ID": session_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        return {"error": _error(exc, "Unable to transcribe voice input")}
+
+
+def synthesize_speech(
+    text: str,
+    session_id: str,
+    language_code: str,
+    speaker: str | None,
+    pace: float | None,
+) -> dict:
+    try:
+        response = requests.post(
+            f"{PYTHON_BASE_URL}/rag/speech/synthesize",
+            json={
+                "text": text,
+                "language_code": language_code,
+                "speaker": speaker if speaker and speaker != "auto" else None,
+                "pace": pace,
+            },
+            headers={"X-Session-ID": session_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        return {"error": _error(exc, "Unable to synthesize voice response")}
+
+
+def get_voice_capabilities() -> dict:
+    try:
+        response = requests.get(
+            f"{PYTHON_BASE_URL}/rag/speech/voices",
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        return {"enabled": False, "error": _error(exc, "Unable to load voice settings")}
 
 
 def create_evaluation(

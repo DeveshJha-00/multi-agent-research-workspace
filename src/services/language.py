@@ -8,7 +8,10 @@ changing RAG or upload flows.
 from dataclasses import dataclass
 from typing import Protocol
 
+import httpx
 from pydantic import BaseModel, Field
+
+from src.core.config import settings
 
 INDIC_SCRIPT_RANGES = (
     ("Deva", "\u0900", "\u097F", "hi-IN"),
@@ -52,6 +55,43 @@ class HeuristicLanguageDetectionService:
 
     async def detect_text(self, text: str) -> LanguageDetection:
         return detect_text_language(text)
+
+
+class SarvamLanguageDetectionService:
+    """Sarvam-backed text language identification with heuristic fallback."""
+
+    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        self._client = client
+
+    async def detect_text(self, text: str) -> LanguageDetection:
+        if not settings.sarvam_configured:
+            return detect_text_language(text)
+        snippet = text.strip()[:1000]
+        if not snippet:
+            return detect_text_language(text)
+        close_client = self._client is None
+        client = self._client or httpx.AsyncClient(timeout=20.0)
+        try:
+            response = await client.post(
+                f"{settings.sarvam_base_url.rstrip('/')}/text-lid",
+                headers={"api-subscription-key": settings.sarvam_api_key},
+                json={"input": snippet},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            language = payload.get("language_code") or "en-IN"
+            script = payload.get("script_code") or "Latn"
+            return LanguageDetection(language_code=language, script_code=script)
+        except Exception:
+            return detect_text_language(text)
+        finally:
+            if close_client:
+                await client.aclose()
+
+
+async def detect_query_language(text: str) -> LanguageDetection:
+    """Detect query language using Sarvam when available, otherwise locally."""
+    return await SarvamLanguageDetectionService().detect_text(text)
 
 
 def detect_text_language(text: str) -> LanguageDetection:

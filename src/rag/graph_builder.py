@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.prompts import PromptTemplate
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
@@ -31,6 +31,15 @@ config = Config()
 def _history(messages: list[BaseMessage], limit: int = 10) -> str:
     selected = messages[-limit:]
     return "\n".join(f"{message.type}: {message.content}" for message in selected)
+
+
+def _language_instruction(answer_language: str | None) -> str:
+    if not answer_language or answer_language == "auto":
+        return "Answer in the user's question language."
+    return (
+        f"Answer in {answer_language}. Keep quoted source text, citations, code, URLs, "
+        "names, and exact document phrases unchanged."
+    )
 
 
 def _format_documents(documents: list[Document], max_chars: int = 4000) -> str:
@@ -210,7 +219,11 @@ async def query_classifier(state: State) -> dict:
 
 
 async def general_llm(state: State) -> dict:
-    result = await get_llm().ainvoke(state["messages"])
+    messages = [
+        SystemMessage(content=_language_instruction(state.get("answer_language"))),
+        *state["messages"],
+    ]
+    result = await get_llm().ainvoke(messages)
     return {
         "messages": [result],
         "answer": result.content,
@@ -334,6 +347,7 @@ async def generate(state: State) -> dict:
             "history": _history(state["messages"][:-1]),
             "context": evidence,
             "retry_instruction": retry_instruction,
+            "answer_language": state.get("answer_language", "auto"),
         }
     )
     return {

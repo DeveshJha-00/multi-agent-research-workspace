@@ -45,6 +45,11 @@ prompts:
     do not interpret "M.S. Ramaiah Institute of Technology" as a separate Master of Science degree.
     If a field is ambiguous, say it is ambiguous and quote the exact supporting text.
     Give a direct, readable answer.
+    Answer language policy:
+    - Desired answer language: {answer_language}
+    - If the desired language is not "auto", write the answer in that language.
+    - Keep quoted source text, names, citations, code, URLs, and exact document phrases unchanged.
+    - If the desired language is unsupported or unclear, answer in the user's question language.
 
     Question: {question}
     Conversation:

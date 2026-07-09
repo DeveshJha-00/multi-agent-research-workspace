@@ -10,6 +10,8 @@ from src.tools.graph_tools import generation_decision, retrieval_decision, routi
 def test_query_request_strips_text_and_validates_session():
     request = QueryRequest(query="  hello  ", session_id="session-123")
     assert request.query == "hello"
+    assert request.query_language == "auto"
+    assert request.answer_language == "auto"
     with pytest.raises(ValidationError):
         QueryRequest(query="hello", session_id="bad id")
 

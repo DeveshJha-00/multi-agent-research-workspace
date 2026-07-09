@@ -31,12 +31,25 @@ from src.models.api import (
     EvaluationStatusResponse,
     IndexedDocumentResponse,
     QueryResponse,
+    SpeechSynthesisRequest,
+    SpeechSynthesisResponse,
+    SpeechTranscriptionResponse,
+    SpeechVoiceCapabilities,
     UploadResponse,
 )
 from src.models.query_request import QueryRequest
 from src.rag.document_upload import documents
 from src.rag.graph_builder import builder
 from src.rag.retriever_setup import delete_document, list_documents
+from src.services.language import detect_query_language
+from src.services.speech import (
+    SarvamSpeechError,
+    SarvamSpeechToTextService,
+    SarvamTextToSpeechService,
+    friendly_sarvam_error,
+    tts_language_supported,
+    voice_capabilities,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/rag", tags=["rag"])
@@ -48,9 +61,25 @@ async def rag_query(req: QueryRequest) -> QueryResponse:
     messages = await history.get_messages()
     user_message = HumanMessage(content=req.query)
     messages.append(user_message)
+    detected = await detect_query_language(req.query)
+    query_language = (
+        req.query_language
+        if req.query_language and req.query_language != "auto"
+        else detected.language_code
+    )
+    answer_language = (
+        req.answer_language
+        if req.answer_language and req.answer_language != "auto"
+        else query_language
+    )
     try:
         result = await builder.ainvoke(
-            {"messages": messages, "session_id": req.session_id},
+            {
+                "messages": messages,
+                "session_id": req.session_id,
+                "query_language": query_language,
+                "answer_language": answer_language,
+            },
             config={"recursion_limit": settings.graph_recursion_limit},
         )
         answer = str(result["answer"])
@@ -86,8 +115,91 @@ async def rag_query(req: QueryRequest) -> QueryResponse:
     except Exception:
         logger.exception("response_snapshot_failed response_id=%s", response_id)
     return QueryResponse(
-        response_id=response_id, content=answer, route=route, sources=sources
+        response_id=response_id,
+        content=answer,
+        route=route,
+        sources=sources,
+        query_language=query_language,
+        answer_language=answer_language,
     )
+
+
+@router.post("/speech/transcribe", response_model=SpeechTranscriptionResponse)
+async def transcribe_speech(
+    file: Annotated[UploadFile, File()],
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> SpeechTranscriptionResponse:
+    del session_id
+    try:
+        transcript = await SarvamSpeechToTextService().transcribe(
+            await file.read(),
+            filename=file.filename or "audio.wav",
+            content_type=file.content_type,
+            language_code=settings.sarvam_stt_language,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=friendly_sarvam_error(exc),
+        ) from exc
+    warnings = []
+    if not transcript.text:
+        warnings.append("Sarvam returned an empty transcript. Try recording again.")
+    return SpeechTranscriptionResponse(
+        transcript=transcript.text,
+        language_code=transcript.language_code,
+        language_probability=transcript.language_probability,
+        request_id=transcript.request_id,
+        warnings=warnings,
+    )
+
+
+@router.post("/speech/synthesize", response_model=SpeechSynthesisResponse)
+async def synthesize_speech(
+    request: SpeechSynthesisRequest,
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> SpeechSynthesisResponse:
+    del session_id
+    if not tts_language_supported(request.language_code):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Bulbul TTS does not support {request.language_code}. "
+                "Showing text only."
+            ),
+        )
+    try:
+        audio = await SarvamTextToSpeechService().synthesize(
+            request.text,
+            language_code=request.language_code,
+            voice=request.speaker,
+            pace=request.pace,
+        )
+    except SarvamSpeechError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=friendly_sarvam_error(exc),
+        ) from exc
+    warning = None
+    if audio.shortened:
+        warning = "Voice playback uses a shortened preview; the full answer is shown as text."
+    return SpeechSynthesisResponse(
+        audio_base64=audio.audio_base64,
+        mime_type=audio.mime_type,
+        language_code=audio.language_code,
+        speaker=audio.speaker,
+        spoken_text=audio.spoken_text,
+        shortened=audio.shortened,
+        request_id=audio.request_id,
+        warning=warning,
+    )
+
+
+@router.get("/speech/voices", response_model=SpeechVoiceCapabilities)
+async def speech_voices() -> SpeechVoiceCapabilities:
+    return SpeechVoiceCapabilities(**voice_capabilities())
 
 
 def _evaluation_response(job: dict, context_count: int = 0) -> EvaluationStatusResponse:

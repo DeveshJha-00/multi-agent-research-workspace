@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     sarvam_max_pages_per_job: int = Field(default=10, ge=1, le=10)
     sarvam_job_poll_seconds: float = Field(default=2.0, ge=0.5, le=30.0)
     sarvam_job_timeout_seconds: int = Field(default=180, ge=30, le=1200)
+    enable_voice_features: bool = True
+    sarvam_stt_model: str = "saaras:v3"
+    sarvam_stt_mode: Literal["transcribe", "translate", "verbatim", "translit", "codemix"] = "transcribe"
+    sarvam_stt_language: str = "unknown"
+    sarvam_tts_model: str = "bulbul:v3"
+    sarvam_tts_default_speaker: str = "auto"
+    sarvam_tts_default_pace: float = Field(default=1.0, ge=0.5, le=2.0)
+    sarvam_tts_audio_format: Literal["wav", "mp3", "linear16", "mulaw", "alaw", "opus", "flac", "aac"] = "wav"
+    sarvam_tts_sample_rate: int = Field(default=24000, ge=8000, le=48000)
+    sarvam_tts_max_chars: int = Field(default=2500, ge=100, le=2500)
+    sarvam_tts_long_answer_char_limit: int = Field(default=700, ge=100, le=2500)
     default_ui_language: str = "en-IN"
     default_answer_language: str = "auto"
     ragas_enabled: bool = True
@@ -133,6 +144,10 @@ class Settings(BaseSettings):
     @property
     def tavily_configured(self) -> bool:
         return self._credential_is_configured(self.tavily_api_key)
+
+    @property
+    def sarvam_configured(self) -> bool:
+        return self._credential_is_configured(self.sarvam_api_key)
 
     @property
     def effective_ragas_judge_model(self) -> str:

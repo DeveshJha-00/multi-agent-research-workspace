@@ -1,5 +1,6 @@
 """Chat and document-management page."""
 
+import base64
 import time
 from uuid import uuid4
 
@@ -11,7 +12,10 @@ from streamlit_app.utils.api_client import (
     get_evaluation,
     get_evaluations,
     get_indexed_documents,
+    get_voice_capabilities,
     query_backend,
+    synthesize_speech,
+    transcribe_speech,
 )
 
 st.set_page_config(page_title="Adaptive RAG Chat", page_icon="💬", layout="wide")
@@ -26,6 +30,9 @@ if "chat_history" not in st.session_state:
 if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = {}
 st.session_state.setdefault("response_evaluations", {})
+st.session_state.setdefault("voice_transcript", "")
+st.session_state.setdefault("voice_language", "auto")
+st.session_state.setdefault("voice_warnings", [])
 
 indexed_documents = get_indexed_documents(st.session_state.session_id)
 st.session_state.uploaded_files = {
@@ -123,6 +130,15 @@ def _evaluation_controls(message: dict) -> None:
 
 def _render_chat_message(message: dict) -> None:
     st.markdown(message["content"])
+    if message.get("tts_audio_base64"):
+        st.audio(
+            base64.b64decode(message["tts_audio_base64"]),
+            format=message.get("tts_mime_type", "audio/wav"),
+        )
+        if message.get("tts_shortened"):
+            st.caption("Voice playback is a shortened preview; full answer is above.")
+    if message.get("tts_error"):
+        st.warning(message["tts_error"])
     if message.get("route"):
         st.caption(f"Route: {message['route']}")
     for source in message.get("sources", []):
@@ -133,6 +149,58 @@ def _render_chat_message(message: dict) -> None:
             page = source.get("page")
             st.markdown(f"- {label}" + (f" (page {page + 1})" if page is not None else ""))
     _evaluation_controls(message)
+
+
+def _voice_enabled() -> bool:
+    return bool(st.session_state.get("voice_answers_enabled"))
+
+
+def _attach_voice_response(message: dict) -> dict:
+    if not _voice_enabled() or message.get("route") == "error":
+        return message
+    language = message.get("answer_language") or st.session_state.get("voice_language") or "en-IN"
+    with st.spinner("Generating voice response..."):
+        audio = synthesize_speech(
+            message["content"],
+            st.session_state.session_id,
+            language,
+            st.session_state.get("tts_speaker"),
+            st.session_state.get("tts_pace"),
+        )
+    if audio.get("error"):
+        message["tts_error"] = audio["error"]
+        return message
+    message.update(
+        {
+            "tts_audio_base64": audio.get("audio_base64"),
+            "tts_mime_type": audio.get("mime_type"),
+            "tts_spoken_text": audio.get("spoken_text"),
+            "tts_shortened": audio.get("shortened", False),
+            "tts_speaker": audio.get("speaker"),
+        }
+    )
+    if audio.get("warning"):
+        message["tts_error"] = audio["warning"]
+    return message
+
+
+def _submit_user_query(
+    query: str,
+    *,
+    query_language: str = "auto",
+    answer_language: str = "auto",
+) -> dict:
+    st.session_state.chat_history.append({"role": "user", "content": query})
+    response = query_backend(
+        query,
+        st.session_state.session_id,
+        query_language=query_language,
+        answer_language=answer_language,
+    )
+    assistant_message = {"role": "assistant", **response}
+    assistant_message = _attach_voice_response(assistant_message)
+    st.session_state.chat_history.append(assistant_message)
+    return assistant_message
 
 
 st.title("Adaptive RAG Chat")
@@ -148,6 +216,34 @@ st.info(
 )
 
 with st.sidebar:
+    voice_capabilities = get_voice_capabilities()
+    st.header("Voice")
+    st.session_state.voice_answers_enabled = st.toggle(
+        "Enable voice answers",
+        value=st.session_state.get("voice_answers_enabled", False),
+        disabled=not voice_capabilities.get("enabled", False),
+    )
+    speakers = voice_capabilities.get("speakers") or ["auto"]
+    current_speaker = st.session_state.get("tts_speaker", "auto")
+    speaker_index = speakers.index(current_speaker) if current_speaker in speakers else 0
+    st.session_state.tts_speaker = st.selectbox(
+        "TTS speaker",
+        speakers,
+        index=speaker_index,
+        disabled=not voice_capabilities.get("enabled", False),
+    )
+    st.session_state.tts_pace = st.slider(
+        "TTS pace",
+        min_value=0.5,
+        max_value=2.0,
+        value=float(st.session_state.get("tts_pace", 1.0)),
+        step=0.1,
+        disabled=not voice_capabilities.get("enabled", False),
+    )
+    if not voice_capabilities.get("enabled", False):
+        st.caption(voice_capabilities.get("error") or "Configure SARVAM_API_KEY to enable voice.")
+    st.divider()
+
     st.header("Documents")
     uploaded_file = st.file_uploader("Upload PDF or TXT", type=["pdf", "txt"])
     description = st.text_input(
@@ -190,17 +286,49 @@ with st.sidebar:
             del st.session_state[key]
         st.switch_page("home.py")
 
+st.subheader("Voice input")
+audio_input = st.audio_input("Record a question")
+if audio_input is not None:
+    if st.button("Transcribe voice"):
+        with st.spinner("Transcribing with Sarvam..."):
+            transcript = transcribe_speech(audio_input, st.session_state.session_id)
+        if transcript.get("error"):
+            st.error(transcript["error"])
+        else:
+            st.session_state.voice_transcript = transcript.get("transcript", "")
+            st.session_state.voice_language = transcript.get("language_code") or "auto"
+            st.session_state.voice_warnings = transcript.get("warnings", [])
+for warning in st.session_state.voice_warnings:
+    st.warning(warning)
+if st.session_state.voice_transcript:
+    st.caption(f"Detected language: {st.session_state.voice_language}")
+    edited_transcript = st.text_area(
+        "Review/edit transcript before sending",
+        value=st.session_state.voice_transcript,
+        key="voice_transcript_editor",
+        max_chars=8000,
+    )
+    if st.button("Send voice transcript"):
+        cleaned = edited_transcript.strip()
+        if cleaned:
+            with st.spinner("Thinking..."):
+                _submit_user_query(
+                    cleaned,
+                    query_language=st.session_state.voice_language,
+                    answer_language=st.session_state.voice_language,
+                )
+            st.session_state.voice_transcript = ""
+            st.session_state.voice_warnings = []
+            st.rerun()
+
 for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         _render_chat_message(message)
 
 if user_input := st.chat_input("Ask a question..."):
-    st.session_state.chat_history.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            response = query_backend(user_input, st.session_state.session_id)
-        assistant_message = {"role": "assistant", **response}
+            assistant_message = _submit_user_query(user_input)
         _render_chat_message(assistant_message)
-    st.session_state.chat_history.append(assistant_message)

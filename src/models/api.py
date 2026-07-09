@@ -20,6 +20,8 @@ class QueryResponse(BaseModel):
     content: str
     route: Literal["index", "general", "search"]
     sources: list[Source] = Field(default_factory=list)
+    query_language: str = "en-IN"
+    answer_language: str = "en-IN"
 
 
 class UploadResponse(BaseModel):
@@ -88,6 +90,43 @@ class EvaluationStatusResponse(BaseModel):
     updated_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+
+class SpeechTranscriptionResponse(BaseModel):
+    transcript: str
+    language_code: str | None = None
+    language_probability: float | None = None
+    request_id: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SpeechSynthesisRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+    language_code: str = Field(default="en-IN", min_length=2, max_length=20)
+    speaker: str | None = Field(default=None, max_length=50)
+    pace: float | None = Field(default=None, ge=0.5, le=2.0)
+
+
+class SpeechSynthesisResponse(BaseModel):
+    audio_base64: str
+    mime_type: str
+    language_code: str
+    speaker: str
+    spoken_text: str
+    shortened: bool = False
+    request_id: str | None = None
+    warning: str | None = None
+
+
+class SpeechVoiceCapabilities(BaseModel):
+    enabled: bool
+    supported_languages: dict[str, str]
+    speakers: list[str]
+    recommended_speakers: dict[str, str]
+    default_speaker: str
+    default_pace: float
+    audio_format: str
+    max_chars: int
 
 
 class ResearchRequest(BaseModel):

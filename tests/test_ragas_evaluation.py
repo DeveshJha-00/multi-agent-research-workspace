@@ -57,6 +57,9 @@ def test_evaluation_routes_are_async_and_queryable():
     assert ("/rag/evaluations/{evaluation_id}", frozenset({"GET"})) in routes
     assert ("/rag/evaluations", frozenset({"GET"})) in routes
     assert ("/rag/documents", frozenset({"GET"})) in routes
+    assert ("/rag/speech/transcribe", frozenset({"POST"})) in routes
+    assert ("/rag/speech/synthesize", frozenset({"POST"})) in routes
+    assert ("/rag/speech/voices", frozenset({"GET"})) in routes
 
 
 def test_evaluation_status_serializes_incremental_metrics():

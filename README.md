@@ -373,11 +373,25 @@ documents use Sarvam only when `SARVAM_API_KEY` is configured.
 | `SARVAM_MAX_PAGES_PER_JOB` | `10` | Sarvam document digitization page cap |
 | `SARVAM_JOB_POLL_SECONDS` | `2.0` | Sarvam job polling interval |
 | `SARVAM_JOB_TIMEOUT_SECONDS` | `180` | Sarvam parsing timeout |
+| `ENABLE_VOICE_FEATURES` | `true` | Enable Sarvam STT/TTS endpoints and UI controls |
+| `SARVAM_STT_MODEL` | `saaras:v3` | Speech-to-text model |
+| `SARVAM_STT_MODE` | `transcribe` | STT output mode |
+| `SARVAM_STT_LANGUAGE` | `unknown` | Let Saaras auto-detect spoken language |
+| `SARVAM_TTS_MODEL` | `bulbul:v3` | Text-to-speech model |
+| `SARVAM_TTS_DEFAULT_SPEAKER` | `auto` | Auto-pick a recommended speaker per language |
+| `SARVAM_TTS_DEFAULT_PACE` | `1.0` | TTS speech speed |
+| `SARVAM_TTS_AUDIO_FORMAT` | `wav` | Returned audio codec |
+| `SARVAM_TTS_SAMPLE_RATE` | `24000` | TTS sample rate |
+| `SARVAM_TTS_MAX_CHARS` | `2500` | Sarvam REST TTS character cap |
+| `SARVAM_TTS_LONG_ANSWER_CHAR_LIMIT` | `700` | Spoken-preview cap for long answers |
 | `DEFAULT_UI_LANGUAGE` | `en-IN` | Future multilingual UI default |
-| `DEFAULT_ANSWER_LANGUAGE` | `auto` | Future answer-language policy |
+| `DEFAULT_ANSWER_LANGUAGE` | `auto` | Default answer-language policy |
 
-Speech-to-text and text-to-speech service boundaries are present for future Sarvam Saaras/Bulbul UI
-work, but the current chat UI does not yet record audio or synthesize answer audio.
+Voice support is available in the Chat page when `SARVAM_API_KEY` is configured. Record a question,
+transcribe it, edit the transcript, and send it through the normal RAG flow. If **Enable voice
+answers** is turned on, short answers are spoken fully; long answers get a concise audio preview while
+the full text remains visible. Bulbul TTS currently supports English plus 10 Indian languages; for
+languages outside that set, the app keeps the text answer and shows a text-only warning.
 
 ### Storage settings
 
