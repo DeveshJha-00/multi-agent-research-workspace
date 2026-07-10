@@ -27,10 +27,10 @@ class Settings(BaseSettings):
     groq_chat_model: str = "openai/gpt-oss-20b"
     embedding_provider: Literal["fastembed"] = "fastembed"
     fastembed_model: str = "BAAI/bge-small-en-v1.5"
-    fastembed_cache_dir: str = ".cache/fastembed"
+    fastembed_cache_dir: str = "/models/fastembed"
     embedding_dimensions: int = Field(default=384, gt=0)
     reranker_model: str = "ms-marco-TinyBERT-L-2-v2"
-    reranker_cache_dir: str = ".cache/flashrank"
+    reranker_cache_dir: str = "/models/flashrank"
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     groq_max_output_tokens: int = Field(default=1200, ge=128, le=4096)
     groq_requests_per_second: float = Field(default=0.2, gt=0.0, le=1.0)

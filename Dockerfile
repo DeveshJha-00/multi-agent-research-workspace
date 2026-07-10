@@ -3,7 +3,14 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    RAGAS_DO_NOT_TRACK=true
+    RAGAS_DO_NOT_TRACK=true \
+    HOME=/tmp \
+    XDG_CACHE_HOME=/models/cache \
+    HF_HOME=/models/huggingface \
+    TRANSFORMERS_CACHE=/models/huggingface \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    FASTEMBED_CACHE_DIR=/models/fastembed \
+    RERANKER_CACHE_DIR=/models/flashrank
 
 WORKDIR /app
 RUN addgroup --system app && adduser --system --ingroup app app
@@ -12,7 +19,8 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY src ./src
-RUN mkdir -p /models/fastembed /models/flashrank && chown -R app:app /app /models
+RUN mkdir -p /models/fastembed /models/flashrank /models/huggingface /models/cache /tmp/matplotlib \
+    && chown -R app:app /app /models /tmp/matplotlib
 USER app
 
 EXPOSE 8000

@@ -26,7 +26,8 @@ TAVILY_API_KEY=...
 ```env
 MONGO_ROOT_USERNAME=admin
 MONGO_ROOT_PASSWORD=password
-MONGODB_URI=mongodb://admin:password@mongo:27017/agentic_rag?authSource=admin
+MONGODB_URL=mongodb://admin:password@mongo:27017/agentic_rag?authSource=admin
+MONGODB_DB_NAME=agentforge
 QDRANT_URL=http://qdrant:6333
 QDRANT_API_KEY=local-dev-key
 QDRANT_COLLECTION=agentic_workspace_bge_v1
@@ -34,6 +35,22 @@ QDRANT_COLLECTION=agentic_workspace_bge_v1
 
 For local Docker Compose, keep service hostnames like `mongo` and `qdrant`. For non-Docker local
 runs, change them to `localhost`.
+
+### Writable model/cache paths
+
+The backend runs as a non-root user. Managed Docker hosts such as Render must let FastEmbed,
+FlashRank, Hugging Face, and plotting libraries write caches only in writable directories:
+
+```env
+HOME=/tmp
+XDG_CACHE_HOME=/models/cache
+HF_HOME=/models/huggingface
+MPLCONFIGDIR=/tmp/matplotlib
+FASTEMBED_CACHE_DIR=/models/fastembed
+RERANKER_CACHE_DIR=/models/flashrank
+```
+
+The backend Dockerfile sets these defaults, but adding them explicitly in Render is also safe.
 
 ### Retrieval and ingestion
 
@@ -293,7 +310,8 @@ The simple managed deployment uses:
 - Dockerfile: `Dockerfile`
 - Health path: `/health/live`
 - Required env vars:
-  - `MONGODB_URI`
+  - `MONGODB_URL`
+  - `MONGODB_DB_NAME`
   - `QDRANT_URL`
   - `QDRANT_API_KEY`
   - `GROQ_API_KEY`
@@ -358,4 +376,3 @@ python -m pytest
 python -m compileall src streamlit_app
 docker compose build
 ```
-
