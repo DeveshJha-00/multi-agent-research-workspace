@@ -218,6 +218,7 @@ def test_chat_ui_exposes_ragas_controls():
     assert "st.audio_input" in content
     assert "Upload audio file" in content
     assert "Browser recorder (experimental)" in content
-    assert "Send voice transcript" in content
+    assert "Transcribe into message box" in content
+    assert "chat-composer" in content
     assert "components.html" in content
     assert "autoplay" in content

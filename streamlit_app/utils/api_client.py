@@ -13,8 +13,11 @@ PYTHON_BASE_URL = os.getenv("RAG_API_URL", "http://127.0.0.1:8000").rstrip("/")
 REQUEST_TIMEOUT = int(os.getenv("RAG_REQUEST_TIMEOUT_SECONDS", "300"))
 
 
-def _error(exc: requests.RequestException, fallback: str) -> str:
-    logger.exception(fallback)
+def _error(exc: requests.RequestException, fallback: str, *, log_exception: bool = True) -> str:
+    if log_exception:
+        logger.exception(fallback)
+    else:
+        logger.warning("%s: %s", fallback, exc)
     if exc.response is not None:
         try:
             detail = exc.response.json().get("detail", "")
@@ -65,7 +68,7 @@ def get_chat_history(session_id: str) -> list[dict]:
         response.raise_for_status()
         return response.json().get("messages", [])
     except requests.RequestException as exc:
-        _error(exc, "Unable to load chat history")
+        _error(exc, "Unable to load chat history", log_exception=False)
         return []
 
 
@@ -117,7 +120,10 @@ def get_voice_capabilities() -> dict:
         response.raise_for_status()
         return response.json()
     except requests.RequestException as exc:
-        return {"enabled": False, "error": _error(exc, "Unable to load voice settings")}
+        return {
+            "enabled": False,
+            "error": _error(exc, "Unable to load voice settings", log_exception=False),
+        }
 
 
 def create_evaluation(
@@ -163,7 +169,7 @@ def get_evaluations(response_id: str, session_id: str) -> list[dict]:
         response.raise_for_status()
         return response.json()
     except requests.RequestException as exc:
-        _error(exc, "Unable to load response evaluations")
+        _error(exc, "Unable to load response evaluations", log_exception=False)
     return []
 
 
@@ -177,7 +183,7 @@ def get_indexed_documents(session_id: str) -> list[dict]:
         response.raise_for_status()
         return response.json()
     except requests.RequestException as exc:
-        _error(exc, "Unable to load indexed documents")
+        _error(exc, "Unable to load indexed documents", log_exception=False)
     return []
 
 

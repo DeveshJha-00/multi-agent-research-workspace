@@ -87,6 +87,8 @@ SARVAM_TTS_MODEL=bulbul:v3
 SARVAM_TTS_DEFAULT_SPEAKER=auto
 SARVAM_TTS_DEFAULT_PACE=1.0
 DOCUMENT_PARSER_PROVIDER=auto
+SARVAM_DOCUMENT_DOWNLOAD_MAX_BYTES=8388608
+SARVAM_DOCUMENT_MAX_OUTPUT_CHARS=60000
 ```
 
 English documents use local parsing by default. Non-English/Indic documents can use Sarvam document
@@ -102,6 +104,7 @@ MAX_REPOSITORY_FILES=1000
 MAX_REPOSITORY_FILE_BYTES=524288
 MAX_REPOSITORY_TOTAL_BYTES=20971520
 STREAMLIT_SERVER_MAX_UPLOAD_SIZE=200
+EMBEDDING_BATCH_SIZE=16
 ```
 
 `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` is in MB.
@@ -349,6 +352,8 @@ docker compose logs api --tail 150
 - Check file type and size.
 - For non-English or scanned PDFs, configure `SARVAM_API_KEY`.
 - Re-index documents after parser changes.
+- On small Render instances, set `EMBEDDING_BATCH_SIZE=8` and keep
+  `SARVAM_DOCUMENT_MAX_OUTPUT_CHARS` around `60000` to reduce indexing memory spikes.
 
 ### Chat returns search despite uploaded documents
 

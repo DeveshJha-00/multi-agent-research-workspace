@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     sarvam_document_language: str = "auto"
     sarvam_document_output_format: Literal["md", "html", "json"] = "md"
     sarvam_max_pages_per_job: int = Field(default=10, ge=1, le=10)
+    sarvam_document_download_max_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        ge=256 * 1024,
+        le=50 * 1024 * 1024,
+    )
+    sarvam_document_max_output_chars: int = Field(default=60_000, ge=5_000, le=500_000)
     sarvam_job_poll_seconds: float = Field(default=2.0, ge=0.5, le=30.0)
     sarvam_job_timeout_seconds: int = Field(default=180, ge=30, le=1200)
     enable_voice_features: bool = True
@@ -91,7 +97,7 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=1000, ge=200, le=8000)
     chunk_overlap: int = Field(default=150, ge=0, le=2000)
     max_upload_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
-    embedding_batch_size: int = Field(default=64, ge=1, le=256)
+    embedding_batch_size: int = Field(default=16, ge=1, le=256)
     max_history_messages: int = Field(default=30, ge=2, le=200)
     agent_max_iterations: int = Field(default=3, ge=1, le=12)
     supervisor_max_workers: int = Field(default=2, ge=1, le=8)

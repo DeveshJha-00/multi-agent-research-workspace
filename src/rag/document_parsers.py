@@ -539,38 +539,89 @@ def _download_markdown(download_urls: dict) -> str:
         if str(name).lower().endswith((".md", ".markdown", ".zip", ".json")):
             preferred = url
             break
-    response = requests.get(preferred or fallback, timeout=60)
-    response.raise_for_status()
-    content_type = response.headers.get("content-type", "")
-    if (
-        response.content.startswith(b"PK")
-        or "zip" in content_type
-        or (preferred or fallback or "").lower().endswith(".zip")
-    ):
-        return _read_text_from_zip(response.content)
-    if (preferred or fallback or "").lower().endswith(".json"):
-        payload = response.json()
-        return json.dumps(payload, ensure_ascii=False, indent=2)
-    return response.text
+    url = preferred or fallback
+    if not url:
+        raise RuntimeError("Sarvam did not return a usable download URL")
 
-
-def _read_text_from_zip(content: bytes) -> str:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_file:
-        tmp_file.write(content)
-        tmp_path = tmp_file.name
+    tmp_path, first_bytes, content_type = _download_to_temp_file(url)
     try:
-        with zipfile.ZipFile(tmp_path) as archive:
-            names = sorted(
-                name
-                for name in archive.namelist()
-                if name.lower().endswith((".md", ".txt", ".json", ".html"))
-            )
-            parts = []
-            for name in names:
-                parts.append(archive.read(name).decode("utf-8", errors="replace"))
-            return "\n\n".join(parts)
+        if first_bytes.startswith(b"PK") or "zip" in content_type or url.lower().endswith(".zip"):
+            return _read_text_from_zip_path(tmp_path)
+        if url.lower().endswith(".json"):
+            text = _read_text_file_capped(tmp_path)
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                return text
+            return json.dumps(payload, ensure_ascii=False, indent=2)[
+                : settings.sarvam_document_max_output_chars
+            ]
+        return _read_text_file_capped(tmp_path)
     finally:
         os.unlink(tmp_path)
+
+
+def _download_to_temp_file(url: str) -> tuple[str, bytes, str]:
+    response = requests.get(url, timeout=60, stream=True)
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "")
+    limit = settings.sarvam_document_download_max_bytes
+    total = 0
+    first_bytes = b""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".sarvam") as tmp_file:
+        tmp_path = tmp_file.name
+        try:
+            chunks = (
+                response.iter_content(chunk_size=128 * 1024)
+                if hasattr(response, "iter_content")
+                else [response.content]
+            )
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > limit:
+                    raise RuntimeError(
+                        "Sarvam document output is too large for this demo deployment. "
+                        "Use a smaller document or increase SARVAM_DOCUMENT_DOWNLOAD_MAX_BYTES."
+                    )
+                if len(first_bytes) < 8:
+                    first_bytes += chunk[: 8 - len(first_bytes)]
+                tmp_file.write(chunk)
+        except Exception:
+            tmp_file.close()
+            os.unlink(tmp_path)
+            raise
+    return tmp_path, first_bytes, content_type
+
+
+def _read_text_file_capped(path: str) -> str:
+    with open(path, "rb") as file:
+        content = file.read(settings.sarvam_document_max_output_chars + 1)
+    return content.decode("utf-8", errors="replace")[: settings.sarvam_document_max_output_chars]
+
+
+def _read_text_from_zip_path(path: str) -> str:
+    max_chars = settings.sarvam_document_max_output_chars
+    used = 0
+    parts: list[str] = []
+    with zipfile.ZipFile(path) as archive:
+        names = sorted(
+            name
+            for name in archive.namelist()
+            if name.lower().endswith((".md", ".txt", ".json", ".html"))
+        )
+        for name in names:
+            if used >= max_chars:
+                break
+            remaining = max_chars - used
+            with archive.open(name) as file:
+                raw = file.read(remaining + 1)
+            text = raw.decode("utf-8", errors="replace")[:remaining]
+            if text:
+                parts.append(text)
+                used += len(text)
+    return "\n\n".join(parts)
 
 
 async def choose_document_parser(
