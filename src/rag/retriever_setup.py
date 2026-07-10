@@ -187,6 +187,37 @@ def _document_score(document: Document) -> float:
     )
 
 
+def _query_likely_needs_uploaded_docs(query: str) -> bool:
+    lowered = query.casefold()
+    markers = (
+        "uploaded",
+        "document",
+        "doc",
+        "file",
+        "pdf",
+        "resume",
+        "candidate",
+        "policy",
+        "exam",
+        "test",
+        "question paper",
+        "duration",
+        "section",
+        "eligibility",
+        "marks",
+        "class",
+        "skills",
+        "education",
+        "qualification",
+        "project",
+        "experience",
+        "this",
+        "it",
+        "there",
+    )
+    return any(marker in lowered for marker in markers)
+
+
 async def _metadata_matches(query: str, *, session_id: str, limit: int) -> list[Document]:
     query_tokens = _tokenize(query)
     if not query_tokens:
@@ -309,6 +340,63 @@ async def _per_document_candidates(
     return candidates[:limit]
 
 
+async def _representative_document_candidates(
+    query: str,
+    *,
+    session_id: str,
+    limit: int,
+) -> list[Document]:
+    """Return a few indexed chunks when low-memory embeddings miss likely document queries."""
+    if not _query_likely_needs_uploaded_docs(query):
+        return []
+    records, _ = await client.scroll(
+        collection_name=settings.qdrant_collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="session_id",
+                    match=models.MatchValue(value=session_id),
+                )
+            ]
+        ),
+        limit=max(100, limit * 8),
+        with_payload=True,
+        with_vectors=False,
+    )
+    query_tokens = _tokenize(query)
+    grouped: dict[str, list[tuple[float, int, Document]]] = {}
+    for record in records:
+        payload = dict(record.payload or {})
+        if payload.get("binary_like"):
+            continue
+        document = _document_from_payload(
+            payload,
+            score=0.35,
+            score_key="document_candidate_score",
+        )
+        if not document:
+            continue
+        lexical_score = _lexical_score(query_tokens, payload)
+        document.metadata["document_candidate_score"] = max(0.35, lexical_score)
+        document.metadata["retrieval_fallback"] = "representative_uploaded_chunk"
+        document_id = str(
+            document.metadata.get("document_id")
+            or document.metadata.get("source")
+            or "unknown"
+        )
+        chunk_index = int(document.metadata.get("chunk_index") or 0)
+        grouped.setdefault(document_id, []).append((lexical_score, chunk_index, document))
+
+    candidates: list[Document] = []
+    per_document = 2 if len(grouped) <= max(1, limit // 2) else 1
+    for items in grouped.values():
+        items.sort(key=lambda item: (-item[0], item[1]))
+        candidates.extend(document for _, _, document in items[:per_document])
+
+    candidates.sort(key=_document_score, reverse=True)
+    return candidates[:limit]
+
+
 def _merge_documents(primary: list[Document], supplemental: list[Document], limit: int) -> list[Document]:
     merged: list[Document] = []
     seen: set[tuple[str, int | str]] = set()
@@ -403,9 +491,23 @@ async def retrieve_documents(
             document_candidates = []
     else:
         document_candidates = []
+    best_score = max(
+        [_document_score(document) for document in [*documents, *metadata_matches, *document_candidates]],
+        default=0.0,
+    )
+    representative_candidates: list[Document] = []
+    if best_score < 0.45:
+        try:
+            representative_candidates = await _representative_document_candidates(
+                query,
+                session_id=session_id,
+                limit=limit or settings.retrieval_top_k,
+            )
+        except Exception:
+            logger.exception("representative_candidate_retrieval_failed session_id=%s", session_id)
     return _merge_documents(
         documents,
-        [*metadata_matches, *document_candidates],
+        [*metadata_matches, *document_candidates, *representative_candidates],
         limit or settings.retrieval_top_k,
     )
 

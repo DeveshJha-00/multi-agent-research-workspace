@@ -43,10 +43,6 @@ st.session_state.setdefault("voice_transcript", "")
 st.session_state.setdefault("voice_language", "auto")
 st.session_state.setdefault("voice_warnings", [])
 st.session_state.setdefault("voice_input_mode", "Upload audio file")
-st.session_state.setdefault("pending_query_text", "")
-st.session_state.setdefault("pending_query_language", "auto")
-st.session_state.setdefault("pending_answer_language", "auto")
-st.session_state.setdefault("chat_draft_version", 0)
 
 indexed_documents = get_indexed_documents(st.session_state.session_id)
 st.session_state.uploaded_files = {
@@ -167,13 +163,6 @@ def _voice_audio_input():
     if "sample_rate" in inspect.signature(st.audio_input).parameters:
         kwargs["sample_rate"] = 16000
     return st.audio_input("Record a short question", **kwargs)
-
-
-def _set_composer_text(text: str, language: str = "auto") -> None:
-    st.session_state.pending_query_text = text
-    st.session_state.pending_query_language = language or "auto"
-    st.session_state.pending_answer_language = language or "auto"
-    st.session_state.chat_draft_version += 1
 
 
 def _render_chat_message(message: dict) -> None:
@@ -353,7 +342,7 @@ for message in st.session_state.chat_history:
 
 with st.expander("Voice input", expanded=False):
     st.caption(
-        "Transcribe a short voice question into the message box below, then edit or send it."
+        "Transcribe a short voice question, review it, then send it through the normal chat flow."
     )
     input_mode = st.radio(
         "Voice source",
@@ -383,44 +372,37 @@ with st.expander("Voice input", expanded=False):
                 st.error(transcript["error"])
             else:
                 language = transcript.get("language_code") or "auto"
-                _set_composer_text(transcript.get("transcript", ""), language)
+                st.session_state.voice_transcript = transcript.get("transcript", "")
                 st.session_state.voice_language = language
                 st.session_state.voice_warnings = transcript.get("warnings", [])
                 st.rerun()
     for warning in st.session_state.voice_warnings:
         st.warning(warning)
+    if st.session_state.voice_transcript:
+        st.caption(f"Detected language: {st.session_state.voice_language}")
+        edited_transcript = st.text_area(
+            "Review/edit transcript before sending",
+            value=st.session_state.voice_transcript,
+            key="voice_transcript_editor",
+            max_chars=8000,
+        )
+        if st.button("Send voice transcript"):
+            cleaned = edited_transcript.strip()
+            if cleaned:
+                with st.spinner("Thinking..."):
+                    _submit_user_query(
+                        cleaned,
+                        query_language=st.session_state.voice_language,
+                        answer_language=st.session_state.voice_language,
+                    )
+                st.session_state.voice_transcript = ""
+                st.session_state.voice_warnings = []
+                st.rerun()
 
-draft_key = f"chat_draft_{st.session_state.chat_draft_version}"
-if draft_key not in st.session_state:
-    st.session_state[draft_key] = st.session_state.pending_query_text
-with st.form("chat-composer", clear_on_submit=False):
-    st.text_area(
-        "Message",
-        key=draft_key,
-        placeholder="Ask a question...",
-        max_chars=8000,
-        label_visibility="collapsed",
-        height=90,
-    )
-    submitted = st.form_submit_button("Send", use_container_width=True)
-
-if submitted:
-    user_input = st.session_state[draft_key].strip()
-else:
-    user_input = ""
-
-if user_input:
-    query_language = st.session_state.pending_query_language
-    answer_language = st.session_state.pending_answer_language
-    _set_composer_text("")
+if user_input := st.chat_input("Ask a question..."):
     with st.chat_message("user"):
         st.markdown(user_input)
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            assistant_message = _submit_user_query(
-                user_input,
-                query_language=query_language,
-                answer_language=answer_language,
-            )
+            assistant_message = _submit_user_query(user_input)
         _render_chat_message(assistant_message)
-    st.rerun()

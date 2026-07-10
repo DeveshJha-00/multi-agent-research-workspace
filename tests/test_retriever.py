@@ -293,6 +293,38 @@ async def test_list_documents_groups_chunks_by_document(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_document_like_query_uses_representative_chunks_when_vector_search_misses(monkeypatch):
+    async def fake_query_points(**kwargs):
+        return SimpleNamespace(points=[])
+
+    async def fake_scroll(**kwargs):
+        return [
+            SimpleNamespace(
+                payload={
+                    "content": "प्रश्न पत्र\nसमय: 90 मिनट\nखंड अ और खंड ब",
+                    "source": "hindi_doc.pdf",
+                    "document_id": "document-hindi",
+                    "chunk_index": 0,
+                    "session_id": "session-123",
+                }
+            )
+        ], None
+
+    monkeypatch.setattr(retriever_setup, "get_embeddings", lambda: FakeEmbeddings())
+    monkeypatch.setattr(retriever_setup.client, "query_points", fake_query_points)
+    monkeypatch.setattr(retriever_setup.client, "scroll", fake_scroll)
+
+    documents = await retriever_setup.retrieve_documents(
+        "How many sections does the exam have?",
+        session_id="session-123",
+    )
+
+    assert documents
+    assert documents[0].metadata["document_id"] == "document-hindi"
+    assert documents[0].metadata["retrieval_fallback"] == "representative_uploaded_chunk"
+
+
+@pytest.mark.asyncio
 async def test_real_qdrant_local_collection_round_trip(monkeypatch):
     local_client = AsyncQdrantClient(":memory:")
     monkeypatch.setattr(retriever_setup, "client", local_client)
