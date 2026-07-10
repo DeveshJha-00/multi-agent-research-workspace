@@ -1,6 +1,7 @@
 """Chat and document-management page."""
 
 import base64
+import inspect
 import time
 from uuid import uuid4
 
@@ -41,6 +42,7 @@ st.session_state.setdefault("response_evaluations", {})
 st.session_state.setdefault("voice_transcript", "")
 st.session_state.setdefault("voice_language", "auto")
 st.session_state.setdefault("voice_warnings", [])
+st.session_state.setdefault("voice_input_mode", "Upload audio file")
 
 indexed_documents = get_indexed_documents(st.session_state.session_id)
 st.session_state.uploaded_files = {
@@ -150,6 +152,17 @@ def _evaluation_controls(message: dict) -> None:
                 st.session_state[expanded_key] = True
         if job:
             _render_evaluation(job)
+
+
+def _voice_audio_input():
+    """Render Streamlit's recorder with low-sample-rate support when available."""
+    kwargs = {
+        "key": "voice_audio_recorder",
+        "help": "Keep browser recordings short. Use upload mode if your browser hangs.",
+    }
+    if "sample_rate" in inspect.signature(st.audio_input).parameters:
+        kwargs["sample_rate"] = 16000
+    return st.audio_input("Record a short question", **kwargs)
 
 
 def _render_chat_message(message: dict) -> None:
@@ -323,40 +336,62 @@ with st.sidebar:
         for item in st.session_state.uploaded_files.values():
             st.caption(f"{item['filename']} · {item['chunks_indexed']} chunks")
 
-st.subheader("Voice input")
-audio_input = st.audio_input("Record a question")
-if audio_input is not None:
-    if st.button("Transcribe voice"):
-        with st.spinner("Transcribing with Sarvam..."):
-            transcript = transcribe_speech(audio_input, st.session_state.session_id)
-        if transcript.get("error"):
-            st.error(transcript["error"])
-        else:
-            st.session_state.voice_transcript = transcript.get("transcript", "")
-            st.session_state.voice_language = transcript.get("language_code") or "auto"
-            st.session_state.voice_warnings = transcript.get("warnings", [])
-for warning in st.session_state.voice_warnings:
-    st.warning(warning)
-if st.session_state.voice_transcript:
-    st.caption(f"Detected language: {st.session_state.voice_language}")
-    edited_transcript = st.text_area(
-        "Review/edit transcript before sending",
-        value=st.session_state.voice_transcript,
-        key="voice_transcript_editor",
-        max_chars=8000,
+with st.expander("Voice input", expanded=False):
+    st.caption(
+        "Upload audio is the safest option on deployed Streamlit. The browser recorder is "
+        "available, but very long recordings can make the page unresponsive in some browsers."
     )
-    if st.button("Send voice transcript"):
-        cleaned = edited_transcript.strip()
-        if cleaned:
-            with st.spinner("Thinking..."):
-                _submit_user_query(
-                    cleaned,
-                    query_language=st.session_state.voice_language,
-                    answer_language=st.session_state.voice_language,
-                )
-            st.session_state.voice_transcript = ""
-            st.session_state.voice_warnings = []
-            st.rerun()
+    input_mode = st.radio(
+        "Voice source",
+        options=["Upload audio file", "Browser recorder (experimental)"],
+        key="voice_input_mode",
+        horizontal=True,
+    )
+    if input_mode == "Browser recorder (experimental)":
+        audio_input = _voice_audio_input()
+    else:
+        audio_input = st.file_uploader(
+            "Upload a short voice question",
+            type=["wav", "mp3", "m4a", "webm", "ogg"],
+            key="voice_audio_upload",
+        )
+    if audio_input is not None:
+        size = getattr(audio_input, "size", 0) or len(audio_input.getvalue())
+        size_mb = size / (1024 * 1024)
+        st.caption(f"Audio size: {size_mb:.2f} MB")
+        if size_mb > 8:
+            st.error("Audio is too large for a quick demo. Please use a shorter clip under 8 MB.")
+        elif st.button("Transcribe voice"):
+            with st.spinner("Transcribing with Sarvam..."):
+                transcript = transcribe_speech(audio_input, st.session_state.session_id)
+            if transcript.get("error"):
+                st.error(transcript["error"])
+            else:
+                st.session_state.voice_transcript = transcript.get("transcript", "")
+                st.session_state.voice_language = transcript.get("language_code") or "auto"
+                st.session_state.voice_warnings = transcript.get("warnings", [])
+    for warning in st.session_state.voice_warnings:
+        st.warning(warning)
+    if st.session_state.voice_transcript:
+        st.caption(f"Detected language: {st.session_state.voice_language}")
+        edited_transcript = st.text_area(
+            "Review/edit transcript before sending",
+            value=st.session_state.voice_transcript,
+            key="voice_transcript_editor",
+            max_chars=8000,
+        )
+        if st.button("Send voice transcript"):
+            cleaned = edited_transcript.strip()
+            if cleaned:
+                with st.spinner("Thinking..."):
+                    _submit_user_query(
+                        cleaned,
+                        query_language=st.session_state.voice_language,
+                        answer_language=st.session_state.voice_language,
+                    )
+                st.session_state.voice_transcript = ""
+                st.session_state.voice_warnings = []
+                st.rerun()
 
 for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):

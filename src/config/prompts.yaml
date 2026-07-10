@@ -5,6 +5,9 @@ prompts:
     - general: it is casual conversation or stable general knowledge and does not need the excerpts.
     - search: it needs current, external, or niche information not present in the excerpts.
     Prefer index whenever relevant document evidence exists. Use conversation history to resolve follow-ups.
+    Do not choose index only because conversation memory exists. If the user is asking about
+    your behavior, prior instructions, names/preferences, or why you did/didn't do something,
+    choose general unless uploaded documents are genuinely needed.
     Keep the reason concise.
 
     Conversation:
@@ -41,6 +44,12 @@ prompts:
     Conversation memory evidence is valid for user-provided personal facts, preferences, and prior
     constraints. Use uploaded-document evidence for document/test/policy rules, and conversation
     memory for facts the user previously gave about themself.
+    Session instructions/user preferences are behavioral rules for how you should respond, not
+    ordinary document facts. Follow them throughout the session unless the current user message,
+    safety, or higher-priority system/developer instructions override them. If the user asked you
+    to address them by name, start future answers with that name when natural. If the user points
+    out that you missed a prior instruction, acknowledge it plainly, correct course, and continue;
+    do not refuse only because the uploaded documents do not contain that instruction.
     When both uploaded-document and web-search evidence are present, clearly say which part came from
     the uploaded/indexed document and which part came from web search.
     Preserve exact names, institution names, degree labels, dates, skills, and numbers from the evidence.
@@ -56,6 +65,9 @@ prompts:
     - The current query language overrides prior chat history language.
     - Keep quoted source text, names, citations, code, URLs, and exact document phrases unchanged.
     - If the desired language is unsupported or unclear, answer in the user's question language.
+
+    Session instructions/user preferences:
+    {session_instructions}
 
     Question: {question}
     Conversation:

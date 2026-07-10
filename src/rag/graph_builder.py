@@ -33,6 +33,57 @@ def _history(messages: list[BaseMessage], limit: int = 10) -> str:
     return "\n".join(f"{message.type}: {message.content}" for message in selected)
 
 
+def _session_instructions(messages: list[BaseMessage], limit: int | None = None) -> str:
+    """Extract user-provided session preferences/instructions from recent turns."""
+    selected = messages[-(limit or settings.max_history_messages) :]
+    instruction_terms = (
+        "address me",
+        "call me",
+        "my name is",
+        "i am ",
+        "i'm ",
+        "remember",
+        "from now",
+        "for future",
+        "in future",
+        "throughout",
+        "always",
+        "every response",
+        "all your responses",
+        "all responses",
+        "respond",
+        "reply",
+        "answer me",
+        "format",
+        "tone",
+        "style",
+        "instruction",
+        "follow",
+        "use my",
+        "don't",
+        "do not",
+    )
+    lines = []
+    used = 0
+    for message in selected:
+        if message.type != "human":
+            continue
+        content = str(message.content).strip()
+        if not content:
+            continue
+        lowered = content.casefold()
+        if not any(term in lowered for term in instruction_terms):
+            continue
+        line = f"- {content}"
+        if used + len(line) > 2500 and lines:
+            break
+        lines.append(line)
+        used += len(line)
+    if not lines:
+        return "No explicit session-level user preferences or instructions found."
+    return "\n".join(lines)
+
+
 def _conversation_memory_documents(messages: list[BaseMessage]) -> list[Document]:
     """Expose recent session chat as evidence for user-provided facts."""
     if not messages:
@@ -89,6 +140,43 @@ def _language_instruction(answer_language: str | None, query_language: str | Non
         "different language. Keep quoted source text, citations, code, URLs, names, "
         "and exact document phrases unchanged."
     )
+
+
+def _behavior_instruction(messages: list[BaseMessage], answer_language: str | None, query_language: str | None = None) -> str:
+    return (
+        f"{_language_instruction(answer_language, query_language)}\n"
+        "Session-level user preferences and instructions:\n"
+        f"{_session_instructions(messages)}\n"
+        "Obey these user preferences in the current answer unless they conflict with safety, "
+        "the current user message, or higher-priority system/developer instructions. "
+        "For example, if the user asked to be addressed by name, start relevant future answers "
+        "with that name. If the user points out you missed an instruction, acknowledge it and "
+        "follow it going forward."
+    )
+
+
+def _is_conversation_management_query(question: str) -> bool:
+    """Detect questions mainly about the current chat/session behavior."""
+    lowered = question.casefold()
+    markers = (
+        "address me",
+        "call me",
+        "my name",
+        "remember me",
+        "why did you",
+        "why didn't you",
+        "why didnt you",
+        "previous answer",
+        "previous query",
+        "earlier answer",
+        "earlier query",
+        "last response",
+        "future response",
+        "future messages",
+        "all your responses",
+        "throughout this session",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def _format_documents(documents: list[Document], max_chars: int = 4000) -> str:
@@ -248,6 +336,9 @@ async def query_classifier(state: State) -> dict:
         messages=state["messages"],
     )
     _log_documents("retrieved", documents)
+    has_non_memory_documents = any(
+        doc.metadata.get("source_kind") != "conversation_memory" for doc in documents
+    )
     prompt = PromptTemplate.from_template(config.prompt("classify_prompt"))
     classifier = get_structured_llm(RouteIdentifier)
     try:
@@ -260,12 +351,15 @@ async def query_classifier(state: State) -> dict:
         )
     except Exception:
         logger.exception("query_classifier_failed; using deterministic fallback route")
-        fallback_route = "index" if documents else "general"
+        fallback_route = "index" if has_non_memory_documents else "general"
         result = RouteIdentifier(
             route=fallback_route,
             reason="Classifier structured output failed; selected a safe fallback route.",
         )
-    effective_route = "index" if documents and result.route != "index" else result.route
+    should_force_index = has_non_memory_documents and not _is_conversation_management_query(
+        str(question)
+    )
+    effective_route = "index" if should_force_index and result.route != "index" else result.route
     logger.info(
         "query_routed route=%s effective_route=%s candidates=%d",
         result.route,
@@ -285,7 +379,8 @@ async def query_classifier(state: State) -> dict:
 async def general_llm(state: State) -> dict:
     messages = [
         SystemMessage(
-            content=_language_instruction(
+            content=_behavior_instruction(
+                state["messages"],
                 state.get("answer_language"),
                 state.get("query_language"),
             )
@@ -415,6 +510,7 @@ async def generate(state: State) -> dict:
         {
             "question": state["messages"][-1].content,
             "history": _history(state["messages"][:-1]),
+            "session_instructions": _session_instructions(state["messages"]),
             "context": evidence,
             "retry_instruction": retry_instruction,
             "answer_language": state.get("answer_language", "auto"),
