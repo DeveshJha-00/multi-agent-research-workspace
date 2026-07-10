@@ -19,8 +19,10 @@ from streamlit_app.utils.api_client import (
     retry_research_job,
     stream_research_events,
 )
+from streamlit_app.utils.ui import apply_custom_css
 
 st.set_page_config(page_title="Agentic Research", page_icon="🧭", layout="wide")
+apply_custom_css()
 
 if "session_id" not in st.session_state:
     st.warning("Open a workspace first.")
@@ -143,6 +145,8 @@ with st.sidebar:
     else:
         uploaded = st.file_uploader("Source repository ZIP", type=["zip"], key="repository_zip")
         description = st.text_input("Repository description", key="repository_description")
+        if uploaded:
+            st.caption(f"Selected ZIP size: {uploaded.size / (1024 * 1024):.1f} MB")
         if st.button("Store repository", disabled=not uploaded):
             with st.spinner("Validating and storing safe source files..."):
                 result = repository_upload(uploaded, description, st.session_state.session_id)
@@ -154,7 +158,9 @@ with st.sidebar:
                 st.error(result.get("error", "Repository upload failed."))
         st.caption(
             "ZIPs are inspected as untrusted text. Vendor folders, binaries, symlinks, and unsafe "
-            "paths are ignored; uploaded code is never executed."
+            "paths are ignored; uploaded code is never executed. If upload fails before this app can "
+            "show a friendly backend error, reduce the ZIP size or increase Streamlit's "
+            "server.maxUploadSize setting."
         )
 
     st.divider()
@@ -263,24 +269,6 @@ for run_index, run in enumerate(st.session_state.research_runs):
     st.divider()
     st.subheader(f"Research result {len(st.session_state.research_runs) - run_index}")
     st.markdown(run.get("content", "No report returned."))
-
-    critique = run.get("critique", {})
-    with st.expander("Evidence audit"):
-        st.metric("Coverage score", f"{critique.get('coverage_score', 0):.0%}")
-        st.write("Approved" if critique.get("approved") else "Completed with limitations")
-        for problem in critique.get("problems", []):
-            st.warning(problem)
-
-    with st.expander("Specialist activity"):
-        for worker in run.get("worker_results", []):
-            st.markdown(f"**{worker['agent']}** - {worker['instruction']}")
-            st.write(worker.get("summary", ""))
-            st.caption(
-                f"Tool calls: {worker.get('tool_calls', 0)} | "
-                f"Evidence items: {len(worker.get('evidence_ids', []))}"
-            )
-            if worker.get("error"):
-                st.error(worker["error"])
 
     if run.get("artifacts"):
         st.markdown("#### Downloads")

@@ -4,7 +4,10 @@ from uuid import uuid4
 
 import streamlit as st
 
+from streamlit_app.utils.ui import apply_custom_css
+
 st.set_page_config(page_title="Agentic Research Workspace", page_icon="🧭")
+apply_custom_css()
 st.title("Agentic Research Workspace")
 st.write("Chat with documents or delegate deeper work to specialized research and data agents.")
 st.caption("Authentication is not enabled. Workspace IDs organize data but are not access control.")

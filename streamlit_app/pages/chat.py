@@ -18,8 +18,10 @@ from streamlit_app.utils.api_client import (
     synthesize_speech,
     transcribe_speech,
 )
+from streamlit_app.utils.ui import apply_custom_css
 
 st.set_page_config(page_title="Adaptive RAG Chat", page_icon="💬", layout="wide")
+apply_custom_css()
 
 if "session_id" not in st.session_state:
     st.warning("Open a workspace first.")
@@ -92,11 +94,20 @@ def _watch_evaluation(evaluation_id: str) -> dict:
     return latest
 
 
+def _keep_evaluation_expanded(response_id: str) -> None:
+    st.session_state[f"evaluation-expanded-{response_id}"] = True
+
+
 def _evaluation_controls(message: dict) -> None:
     response_id = message.get("response_id")
     if not response_id:
         return
-    with st.expander("RAGAS evaluation", expanded=False):
+    expanded_key = f"evaluation-expanded-{response_id}"
+    expanded = bool(
+        st.session_state.get(expanded_key)
+        or st.session_state.response_evaluations.get(response_id)
+    )
+    with st.expander("RAGAS evaluation", expanded=expanded):
         st.caption(
             "Scores are model-based diagnostics, not proof that an answer is correct. "
             "Leave the reference blank for reference-free evaluation."
@@ -106,7 +117,12 @@ def _evaluation_controls(message: dict) -> None:
             key=f"evaluation-reference-{response_id}",
             max_chars=12_000,
         )
-        if st.button("Evaluate response", key=f"evaluate-{response_id}"):
+        if st.button(
+            "Evaluate response",
+            key=f"evaluate-{response_id}",
+            on_click=_keep_evaluation_expanded,
+            args=(response_id,),
+        ):
             created = create_evaluation(
                 response_id,
                 st.session_state.session_id,
@@ -119,12 +135,14 @@ def _evaluation_controls(message: dict) -> None:
                 with st.spinner("RAGAS is evaluating this response..."):
                     job = _watch_evaluation(created["evaluation_id"])
                 st.session_state.response_evaluations[response_id] = job
+                st.session_state[expanded_key] = True
         job = st.session_state.response_evaluations.get(response_id)
         if not job:
             history = get_evaluations(response_id, st.session_state.session_id)
             if history:
                 job = history[0]
                 st.session_state.response_evaluations[response_id] = job
+                st.session_state[expanded_key] = True
         if job:
             _render_evaluation(job)
 

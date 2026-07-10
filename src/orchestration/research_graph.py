@@ -1,18 +1,16 @@
-"""Supervisor-worker research graph with bounded critique and revision."""
+"""Supervisor-worker research graph for durable multi-agent reports."""
 
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.types import Send
 
 from src.agents.base import AgentContext
-from src.agents.critic import evidence_critic
 from src.agents.deliverable_builder import deliverable_builder
 from src.agents.registry import run_specialist
 from src.agents.supervisor import create_research_plan
-from src.core.config import settings
 from src.db.checkpoint_store import checkpoint_saver
 from src.db.research_job_store import append_event, ensure_job_not_cancelled
-from src.models.agent import AgentTask, OrchestrationState, WorkerState
+from src.models.agent import OrchestrationState, WorkerState
 
 
 async def plan_work(state: OrchestrationState) -> dict:
@@ -33,7 +31,7 @@ async def plan_work(state: OrchestrationState) -> dict:
         message=f"Supervisor delegated {len(plan.tasks)} specialist task(s)",
         details={"agents": [task.agent for task in plan.tasks]},
     )
-    return {"plan": plan.tasks, "worker_results": [], "revision_count": 0}
+    return {"plan": plan.tasks, "worker_results": []}
 
 
 def dispatch_workers(state: OrchestrationState):
@@ -85,60 +83,6 @@ async def run_worker(state: WorkerState) -> dict:
     return {"worker_results": [result]}
 
 
-async def critique_work(state: OrchestrationState) -> dict:
-    await ensure_job_not_cancelled(state["task_id"])
-    await append_event(
-        state["task_id"],
-        event="critique_started",
-        stage="critique",
-        progress=70,
-        message="Evidence critic is auditing the findings",
-    )
-    allow_follow_ups = state.get("revision_count", 0) < settings.agent_max_revisions
-    critique = await evidence_critic.review(
-        task_id=state["task_id"],
-        session_id=state["session_id"],
-        objective=state["objective"],
-        results=state.get("worker_results", []),
-        allow_follow_ups=allow_follow_ups,
-    )
-    await append_event(
-        state["task_id"],
-        event="critique_completed",
-        stage="critique",
-        progress=78,
-        message="Evidence audit completed",
-        details={
-            "approved": critique.approved,
-            "coverage_score": critique.coverage_score,
-            "follow_up_tasks": len(critique.follow_up_tasks),
-        },
-    )
-    return {"critique": critique}
-
-
-def after_critique(state: OrchestrationState) -> str:
-    if state["critique"].follow_up_tasks and not state["critique"].approved:
-        return "prepare_revision"
-    return "build_deliverable"
-
-
-async def prepare_revision(state: OrchestrationState) -> dict:
-    await ensure_job_not_cancelled(state["task_id"])
-    tasks = [
-        AgentTask(agent=item.agent, instruction=item.instruction, rationale=item.rationale)
-        for item in state["critique"].follow_up_tasks
-    ]
-    await append_event(
-        state["task_id"],
-        event="revision_started",
-        stage="revision",
-        progress=80,
-        message=f"Critic requested {len(tasks)} follow-up task(s)",
-    )
-    return {"plan": tasks, "revision_count": state.get("revision_count", 0) + 1}
-
-
 async def build_deliverable(state: OrchestrationState) -> dict:
     await ensure_job_not_cancelled(state["task_id"])
     await append_event(
@@ -153,9 +97,7 @@ async def build_deliverable(state: OrchestrationState) -> dict:
             task_id=state["task_id"],
             session_id=state["session_id"],
             objective=state["objective"],
-            instruction=(
-                "Create the final report. Incorporate the specialist findings and the critic's audit."
-            ),
+            instruction="Create the final report from the specialist findings and evidence.",
             prior_results=state.get("worker_results", []),
         )
     )
@@ -173,18 +115,10 @@ async def build_deliverable(state: OrchestrationState) -> dict:
 graph = StateGraph(OrchestrationState)
 graph.add_node("plan", plan_work)
 graph.add_node("run_worker", run_worker)
-graph.add_node("critique", critique_work)
-graph.add_node("prepare_revision", prepare_revision)
 graph.add_node("build_deliverable", build_deliverable)
 graph.add_edge(START, "plan")
 graph.add_conditional_edges("plan", dispatch_workers, ["run_worker"])
-graph.add_edge("run_worker", "critique")
-graph.add_conditional_edges(
-    "critique",
-    after_critique,
-    {"prepare_revision": "prepare_revision", "build_deliverable": "build_deliverable"},
-)
-graph.add_conditional_edges("prepare_revision", dispatch_workers, ["run_worker"])
+graph.add_edge("run_worker", "build_deliverable")
 graph.add_edge("build_deliverable", END)
 
 research_orchestrator = graph.compile(checkpointer=checkpoint_saver)

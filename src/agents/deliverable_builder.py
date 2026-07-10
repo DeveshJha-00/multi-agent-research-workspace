@@ -109,8 +109,8 @@ class DeliverableBuilderAgent:
 
     async def build(self, context: AgentContext) -> tuple[AgentResult, list[ArtifactRecord]]:
         evidence = await get_evidence(context.task_id, limit=30)
-        prior = compact_results(context.prior_results, settings.critic_results_chars)
-        evidence_text = compact_evidence(evidence, settings.critic_evidence_chars)
+        prior = compact_results(context.prior_results, settings.deliverable_results_chars)
+        evidence_text = compact_evidence(evidence, settings.deliverable_evidence_chars)
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", self.system_prompt),

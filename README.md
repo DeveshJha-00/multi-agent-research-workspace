@@ -59,7 +59,6 @@ The Research workspace runs a supervisor-worker LangGraph:
   and charts.
 - `repository_analyst`: safely inspects uploaded source ZIPs with bounded tree, file-read, and literal
   code-search tools without executing repository code.
-- `evidence_critic`: audits evidence coverage and can request one bounded revision round.
 - `deliverable_builder`: creates and stores a Markdown research report.
 
 Every specialist records evidence IDs and source metadata in a shared MongoDB ledger. Reports and PNG
@@ -81,7 +80,7 @@ side effects remain deduplicated.
 
 Document and web evidence collection is deterministic to avoid unreliable free-model tool calls.
 Data-only reports are assembled directly from computed results so the model cannot alter numeric
-facts. Groq structured-output failures have deterministic supervisor and critic fallbacks.
+facts. Groq structured-output failures have deterministic supervisor and deliverable fallbacks.
 
 ### Dataset analysis
 
@@ -162,8 +161,7 @@ flowchart LR
     WEBAGENT --> LEDGER
     DATA --> LEDGER
     REPO --> LEDGER
-    LEDGER --> CRITIC[Evidence critic]
-    CRITIC --> REPORT[Report and chart artifacts]
+    LEDGER --> REPORT[Report and chart artifacts]
 
     RAG --> QDRANT[(Qdrant)]
     API --> MONGO[(MongoDB)]
@@ -213,9 +211,8 @@ described as `hindi_document` even when cross-language embeddings are weak.
 3. The supervisor selects distinct relevant specialists.
 4. Specialists run in parallel where possible, write idempotent evidence, and emit progress events.
 5. LangGraph stores checkpoints and pending writes in MongoDB after graph steps.
-6. The critic evaluates coverage and may request one deduplicated revision round.
-7. The deliverable builder writes retry-safe artifacts; data-only deliverables remain deterministic.
-8. The result is persisted on the job. The UI receives live SSE updates and can later reconnect by ID.
+6. The deliverable builder writes retry-safe artifacts; data-only deliverables remain deterministic.
+7. The result is persisted on the job. The UI receives live SSE updates and can later reconnect by ID.
 
 For repository work, the specialist additionally persists its own internal inventory, inspection,
 search, and result stages. This finer checkpoint is necessary because the outer LangGraph checkpoint
@@ -273,7 +270,7 @@ Important trade-offs:
 |-- sample-policy.txt            Document test fixture
 |-- sales.csv                    Dataset test fixture
 |-- src/
-|   |-- agents/                  Supervisor, specialists, critic, deliverable builder
+|   |-- agents/                  Supervisor, specialists, deliverable builder
 |   |-- api/                     RAG and multi-agent HTTP endpoints
 |   |-- config/                  Prompt templates
 |   |-- core/                    Settings, logging, prompt budgets, integration errors
@@ -421,10 +418,11 @@ FastEmbed vectors at an older 1536-dimensional collection.
 | `MAX_DATASET_ROWS` | `10000` | Maximum stored rows |
 | `MAX_DATASET_COLUMNS` | `100` | Maximum columns |
 | `MAX_HISTORY_MESSAGES` | `30` | Bounded chat history |
-| `MAX_REPOSITORY_UPLOAD_BYTES` | `10485760` | Compressed repository ZIP limit |
+| `MAX_REPOSITORY_UPLOAD_BYTES` | `104857600` | Compressed repository ZIP limit |
 | `MAX_REPOSITORY_FILES` | `1000` | Maximum supported text/source files |
 | `MAX_REPOSITORY_FILE_BYTES` | `524288` | Maximum extracted bytes per stored file |
 | `MAX_REPOSITORY_TOTAL_BYTES` | `20971520` | Maximum total extracted stored text |
+| `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` | `200` | Streamlit browser upload cap in MB |
 | `REPOSITORY_SEARCH_MAX_MATCHES` | `50` | Maximum literal code-search results |
 | `REPOSITORY_EXPLANATION_CONTEXT_CHARS` | `14000` | Grounded source context budget |
 | `REPOSITORY_EXPLANATION_OUTPUT_TOKENS` | `1800` | Maximum explanatory synthesis output |
@@ -442,8 +440,8 @@ FastEmbed vectors at an older 1536-dimensional collection.
 | `RESEARCH_JOB_MAX_ATTEMPTS` | `3` | Maximum automatic lease claims before manual retry |
 | `RESEARCH_EVENT_POLL_SECONDS` | `0.5` | MongoDB-to-SSE progress polling interval |
 | `AGENT_TOOL_RESULT_CHARS` | `8000` | Tool-message context cap |
-| `CRITIC_RESULTS_CHARS` | `3000` | Specialist-summary budget |
-| `CRITIC_EVIDENCE_CHARS` | `6000` | Evidence context budget |
+| `DELIVERABLE_RESULTS_CHARS` | `3000` | Specialist-summary budget for final reports |
+| `DELIVERABLE_EVIDENCE_CHARS` | `6000` | Evidence context budget for final reports |
 
 See `.env.example` for the complete authoritative list.
 
@@ -514,8 +512,8 @@ pause between model-heavy tests because provider free-tier limits are account-de
    > cybersecurity guidance. Identify strengths, gaps, and recommended changes. Produce a sourced
    > report.
 
-   Expect live planning/specialist/critique/report activity, both `document_investigator` and
-   `web_researcher`, an evidence audit, and a non-empty report. Research results do not display a
+   Expect live planning/specialist/report activity, both `document_investigator` and
+   `web_researcher`, and a non-empty report. Research results do not display a
    single Chat route label. Refreshing the page does not cancel the job; use **Durable job history**
    to reconnect.
 
@@ -530,7 +528,7 @@ pause between model-heavy tests because provider free-tier limits are account-de
 
 11. Create a ZIP with the PowerShell command in **Repository-analysis example**. In the Research
     sidebar choose **Repository**, upload it, then open the **Repository analysis** tab. Select a
-    focus and start analysis. Expect live inventory, inspection, search, critic, and report events;
+    focus and start analysis. Expect live inventory, inspection, search, and report events;
     one `repository_analyst` result with file/line evidence; and a non-empty
     `research-report.md`. Upload the identical ZIP again and expect **Reused** rather than a second
     repository. To test reconnection or cancellation, open the same workspace ID in another tab and
@@ -810,11 +808,6 @@ Use Research to combine the uploaded document and web evidence.
 - Avoid multiple back-to-back research runs.
 - Keep objectives concise and retain the configured prompt budgets and pacing.
 - Free-tier limits are provider/account dependent.
-
-### Research completes with limitations
-
-The critic may judge evidence coverage incomplete even when the request succeeds. Inspect Specialist
-activity and the Evidence audit. This is distinct from an API/service failure.
 
 ### Empty or inaccurate old report
 

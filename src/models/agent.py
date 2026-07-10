@@ -33,19 +33,6 @@ class AgentResult(BaseModel):
     error: str | None = None
 
 
-class FollowUpTask(BaseModel):
-    agent: AgentName
-    instruction: str
-    rationale: str
-
-
-class Critique(BaseModel):
-    approved: bool
-    coverage_score: float = Field(ge=0.0, le=1.0)
-    problems: list[str] = Field(default_factory=list)
-    follow_up_tasks: list[FollowUpTask] = Field(default_factory=list, max_length=3)
-
-
 class ArtifactRecord(BaseModel):
     artifact_id: str
     name: str
@@ -59,8 +46,6 @@ class OrchestrationState(TypedDict, total=False):
     available_data: list[str]
     plan: list[AgentTask]
     worker_results: Annotated[list[AgentResult], operator.add]
-    critique: Critique
-    revision_count: int
     final_answer: str
     artifacts: list[ArtifactRecord]
 

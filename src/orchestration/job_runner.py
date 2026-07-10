@@ -116,7 +116,6 @@ class ResearchJobRunner:
                 task_id=task_id,
                 content=result["final_answer"],
                 worker_results=result.get("worker_results", []),
-                critique=result["critique"],
                 artifacts=result.get("artifacts", []),
             ).model_dump(mode="json")
             if await complete_job(task_id, self.worker_id, response):

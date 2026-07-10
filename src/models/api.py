@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from src.models.agent import AgentResult, ArtifactRecord, Critique
+from src.models.agent import AgentResult, ArtifactRecord
 
 
 class Source(BaseModel):
@@ -139,7 +139,6 @@ class ResearchResponse(BaseModel):
     task_id: str
     content: str
     worker_results: list[AgentResult]
-    critique: Critique
     artifacts: list[ArtifactRecord]
 
 
