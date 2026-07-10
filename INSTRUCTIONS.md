@@ -354,6 +354,17 @@ docker compose logs api --tail 150
 - Re-index documents after parser changes.
 - On small Render instances, set `EMBEDDING_BATCH_SIZE=8` and keep
   `SARVAM_DOCUMENT_MAX_OUTPUT_CHARS` around `60000` to reduce indexing memory spikes.
+- If Render still kills the backend while FastEmbed downloads/loads ONNX models, switch the
+  backend to low-memory demo embeddings:
+
+```env
+EMBEDDING_PROVIDER=hash
+QDRANT_COLLECTION=agentforge_hash_v1
+```
+
+`hash` mode is stable on small instances but more lexical than neural semantic retrieval. Use
+`fastembed` locally or on a larger instance for stronger retrieval quality. Use a new
+`QDRANT_COLLECTION` when switching providers so old vectors are not mixed with new ones.
 
 ### Chat returns search despite uploaded documents
 

@@ -42,6 +42,30 @@ async def test_fastembed_adapter_runs_sync_inference_asynchronously():
 
 
 @pytest.mark.asyncio
+async def test_hash_embeddings_are_deterministic_and_normalized():
+    embeddings = provider.HashEmbeddings(dimensions=16)
+
+    first = await embeddings.aembed_query("Java Python MongoDB")
+    second = await embeddings.aembed_query("Java Python MongoDB")
+    different = await embeddings.aembed_query("Hindi exam eligibility")
+
+    assert first == second
+    assert first != different
+    assert len(first) == 16
+    assert sum(value * value for value in first) == pytest.approx(1.0)
+
+
+def test_get_embeddings_can_use_low_memory_hash_provider(monkeypatch):
+    provider.get_embeddings.cache_clear()
+    monkeypatch.setattr(provider.settings, "embedding_provider", "hash")
+
+    try:
+        assert isinstance(provider.get_embeddings(), provider.HashEmbeddings)
+    finally:
+        provider.get_embeddings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_reranker_preserves_original_passage_indexes(monkeypatch):
     class FakeRanker:
         def rerank(self, request):

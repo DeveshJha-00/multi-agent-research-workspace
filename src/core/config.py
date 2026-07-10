@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     llm_provider: Literal["groq"] = "groq"
     groq_api_key: str = ""
     groq_chat_model: str = "openai/gpt-oss-20b"
-    embedding_provider: Literal["fastembed"] = "fastembed"
+    embedding_provider: Literal["fastembed", "hash"] = "fastembed"
     fastembed_model: str = "BAAI/bge-small-en-v1.5"
     fastembed_cache_dir: str = "/models/fastembed"
     embedding_dimensions: int = Field(default=384, gt=0)

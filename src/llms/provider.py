@@ -1,8 +1,11 @@
 """Provider-neutral factories for chat, embeddings, and local reranking."""
 
 import asyncio
+import hashlib
+import math
+import re
 from functools import lru_cache
-from typing import Any
+from typing import Any, Protocol
 
 from fastembed import TextEmbedding
 from flashrank import Ranker, RerankRequest
@@ -10,6 +13,16 @@ from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_groq import ChatGroq
 
 from src.core.config import settings
+
+
+class Embeddings(Protocol):
+    def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
+
+    def embed_query(self, text: str) -> list[float]: ...
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]: ...
+
+    async def aembed_query(self, text: str) -> list[float]: ...
 
 
 @lru_cache
@@ -66,8 +79,63 @@ class FastEmbedEmbeddings:
         return await asyncio.to_thread(self.embed_query, text)
 
 
+class HashEmbeddings:
+    """Tiny deterministic embeddings for memory-constrained demo deployments.
+
+    This is a signed hashing vectorizer, not a neural embedding model. It keeps the
+    same vector-store interface without loading ONNX models, making small Render
+    instances much less likely to be killed while indexing documents.
+    """
+
+    def __init__(self, dimensions: int | None = None) -> None:
+        self.dimensions = dimensions or settings.embedding_dimensions
+
+    def _features(self, text: str) -> list[str]:
+        lowered = text.casefold()
+        words = re.findall(r"[\w\u0900-\u097F]+", lowered, flags=re.UNICODE)
+        features: list[str] = []
+        features.extend(f"w:{word}" for word in words)
+        features.extend(
+            f"b:{left}_{right}" for left, right in zip(words, words[1:], strict=False)
+        )
+        compact = re.sub(r"\s+", "", lowered)
+        if compact:
+            ngram_size = 3 if len(compact) < 80 else 4
+            features.extend(
+                f"c:{compact[index : index + ngram_size]}"
+                for index in range(max(0, len(compact) - ngram_size + 1))
+            )
+        return features or ["empty"]
+
+    def _embed_one(self, text: str) -> list[float]:
+        vector = [0.0] * self.dimensions
+        for feature in self._features(text):
+            digest = hashlib.blake2b(feature.encode("utf-8"), digest_size=8).digest()
+            value = int.from_bytes(digest, "big", signed=False)
+            index = value % self.dimensions
+            sign = 1.0 if (value >> 63) else -1.0
+            weight = 1.5 if feature.startswith("w:") else 1.0
+            vector[index] += sign * weight
+        norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+        return [value / norm for value in vector]
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed_one(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed_one(text)
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return await asyncio.to_thread(self.embed_documents, texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return await asyncio.to_thread(self.embed_query, text)
+
+
 @lru_cache
-def get_embeddings() -> FastEmbedEmbeddings:
+def get_embeddings() -> Embeddings:
+    if settings.embedding_provider == "hash":
+        return HashEmbeddings()
     return FastEmbedEmbeddings()
 
 
