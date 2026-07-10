@@ -646,7 +646,11 @@ async def choose_document_parser(
         and (non_english_detection or has_language_hint)
     )
     if should_try_sarvam:
-        return SarvamDocumentParser(), None, warnings
+        warnings.append(
+            "This document appears non-English/Indic or OCR-like. Trying Sarvam document "
+            "digitization first; local extraction is retained as a fallback."
+        )
+        return SarvamDocumentParser(), preview, warnings
     if preview.detected_language == "en-IN" and preview.script == "Latn" and not has_language_hint:
         if bad_pdf_extraction:
             warnings.append(

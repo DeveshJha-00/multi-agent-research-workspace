@@ -127,8 +127,8 @@ async def test_auto_parser_routes_indic_documents_to_sarvam_when_configured(monk
         extension=".pdf",
     )
     assert parser.provider == "sarvam"
-    assert preview is None
-    assert warnings == []
+    assert preview is parsed
+    assert any("Trying Sarvam" in warning for warning in warnings)
 
 
 @pytest.mark.asyncio
@@ -190,8 +190,8 @@ async def test_auto_parser_routes_garbled_non_english_pdf_to_sarvam(monkeypatch)
         description="hindi document",
     )
     assert parser.provider == "sarvam"
-    assert preview is None
-    assert warnings == []
+    assert preview is parsed
+    assert any("Trying Sarvam" in warning for warning in warnings)
 
 
 @pytest.mark.asyncio

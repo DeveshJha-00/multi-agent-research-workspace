@@ -1,5 +1,6 @@
 """Validated PDF/TXT ingestion into Qdrant."""
 
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,6 +9,8 @@ from fastapi import HTTPException, UploadFile
 from src.core.config import settings
 from src.rag.document_parsers import SUPPORTED_EXTENSIONS, choose_document_parser
 from src.rag.retriever_setup import index_documents
+
+logger = logging.getLogger(__name__)
 
 
 async def documents(description: str, file: UploadFile, session_id: str) -> dict:
@@ -35,16 +38,37 @@ async def documents(description: str, file: UploadFile, session_id: str) -> dict
             extension=extension,
             description=normalized_description,
         )
-        parsed = parsed_preview or await parser.parse(
-            content=content,
-            filename=filename,
-            extension=extension,
-        )
+        if parsed_preview and parser.provider == "sarvam":
+            try:
+                parsed = await parser.parse(
+                    content=content,
+                    filename=filename,
+                    extension=extension,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "sarvam_parse_failed_falling_back session_id=%s filename=%s",
+                    session_id,
+                    filename,
+                )
+                warnings.append(
+                    "Sarvam document digitization failed or timed out, so this file was "
+                    "indexed with best-effort local extraction. Results may be incomplete."
+                )
+                warnings.append(f"Sarvam parser error: {exc}")
+                parsed = parsed_preview
+        else:
+            parsed = parsed_preview or await parser.parse(
+                content=content,
+                filename=filename,
+                extension=extension,
+            )
         chunks = parsed.chunks
         warnings.extend(parsed.warnings)
     except HTTPException:
         raise
     except Exception as exc:
+        logger.exception("document_parse_failed session_id=%s filename=%s", session_id, filename)
         raise HTTPException(status_code=422, detail=f"Unable to parse document: {exc}") from exc
 
     if not chunks:

@@ -89,6 +89,7 @@ SARVAM_TTS_DEFAULT_PACE=1.0
 DOCUMENT_PARSER_PROVIDER=auto
 SARVAM_DOCUMENT_DOWNLOAD_MAX_BYTES=8388608
 SARVAM_DOCUMENT_MAX_OUTPUT_CHARS=60000
+SARVAM_JOB_TIMEOUT_SECONDS=60
 ```
 
 English documents use local parsing by default. Non-English/Indic documents can use Sarvam document

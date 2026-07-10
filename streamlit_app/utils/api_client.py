@@ -198,7 +198,7 @@ def document_upload_rag(file, description: str, session_id: str) -> dict:
         response.raise_for_status()
         return response.json()
     except requests.RequestException as exc:
-        return {"error": _error(exc, "Document upload failed")}
+        return {"error": _error(exc, "Document upload failed", log_exception=False)}
 
 
 def dataset_upload(file, description: str, session_id: str) -> dict:
