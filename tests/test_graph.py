@@ -1,7 +1,13 @@
 import pytest
 from langchain_core.documents import Document
+from langchain_core.messages import AIMessage, HumanMessage
 
-from src.rag.graph_builder import builder, safe_fallback
+from src.rag.graph_builder import (
+    _conversation_memory_documents,
+    _format_documents,
+    builder,
+    safe_fallback,
+)
 
 
 def test_graph_contains_reranking_and_verification():
@@ -26,3 +32,31 @@ async def test_safe_fallback_preserves_retrieved_evidence():
     assert result["answer"] == "Generated answer"
     assert result["sources"][0]["source"] == "resume.pdf"
     assert result["evaluation_contexts"][0]["content"] == "Languages: Java, Python, JavaScript"
+
+
+def test_recent_user_turns_become_conversation_memory_evidence():
+    messages = [
+        HumanMessage(content="I am in class 9. Can I take this test?"),
+        AIMessage(content="The document says class 10."),
+        HumanMessage(content="Which class am I in?"),
+    ]
+
+    documents = _conversation_memory_documents(messages)
+
+    assert len(documents) == 1
+    assert documents[0].metadata["source_kind"] == "conversation_memory"
+    assert "I am in class 9" in documents[0].page_content
+    assert "Current user message: Which class am I in?" in documents[0].page_content
+    assert "The document says class 10" not in documents[0].page_content
+
+
+def test_conversation_memory_is_formatted_as_evidence():
+    document = Document(
+        page_content="User previously said: I am in class 9.",
+        metadata={"source": "Recent conversation memory", "source_kind": "conversation_memory"},
+    )
+
+    formatted = _format_documents([document])
+
+    assert "Conversation memory" in formatted
+    assert "I am in class 9" in formatted

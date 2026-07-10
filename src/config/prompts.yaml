@@ -38,6 +38,9 @@ prompts:
     If evidence is incomplete, state the limitation instead of inventing details.
     Cite supporting evidence inline as [1], [2], etc. Do not cite unsupported claims.
     Uploaded-document evidence is higher priority than web-search evidence.
+    Conversation memory evidence is valid for user-provided personal facts, preferences, and prior
+    constraints. Use uploaded-document evidence for document/test/policy rules, and conversation
+    memory for facts the user previously gave about themself.
     When both uploaded-document and web-search evidence are present, clearly say which part came from
     the uploaded/indexed document and which part came from web search.
     Preserve exact names, institution names, degree labels, dates, skills, and numbers from the evidence.
@@ -47,8 +50,10 @@ prompts:
     If a field is ambiguous, say it is ambiguous and quote the exact supporting text.
     Give a direct, readable answer.
     Answer language policy:
+    - Current query language: {query_language}
     - Desired answer language: {answer_language}
-    - If the desired language is not "auto", write the answer in that language.
+    - If the desired language is not "auto", write the answer strictly in that language, even if earlier conversation turns used another language.
+    - The current query language overrides prior chat history language.
     - Keep quoted source text, names, citations, code, URLs, and exact document phrases unchanged.
     - If the desired language is unsupported or unclear, answer in the user's question language.
 

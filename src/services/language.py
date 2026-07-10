@@ -91,6 +91,8 @@ class SarvamLanguageDetectionService:
 
 async def detect_query_language(text: str) -> LanguageDetection:
     """Detect query language using Sarvam when available, otherwise locally."""
+    if is_obvious_latin_english_query(text):
+        return LanguageDetection(language_code="en-IN", script_code="Latn", confidence=1.0)
     return await SarvamLanguageDetectionService().detect_text(text)
 
 
@@ -113,3 +115,24 @@ def detect_text_language(text: str) -> LanguageDetection:
         total = max(1, sum(counts.values()) + latin)
         return LanguageDetection(language_code=language, script_code=script, confidence=count / total)
     return LanguageDetection(language_code="en-IN", script_code="Latn", confidence=None)
+
+
+def _latin_letter_ratio(text: str) -> float:
+    letters = [char for char in text if char.isalpha()]
+    if not letters:
+        return 0.0
+    latin = sum(1 for char in letters if "A" <= char <= "Z" or "a" <= char <= "z")
+    return latin / len(letters)
+
+
+def is_obvious_latin_english_query(text: str) -> bool:
+    """Fast-path typed English so prior multilingual turns cannot bias language."""
+    sample = text.strip()
+    if not sample:
+        return False
+    heuristic = detect_text_language(sample)
+    return (
+        heuristic.language_code == "en-IN"
+        and heuristic.script_code == "Latn"
+        and _latin_letter_ratio(sample) >= 0.85
+    )

@@ -33,12 +33,61 @@ def _history(messages: list[BaseMessage], limit: int = 10) -> str:
     return "\n".join(f"{message.type}: {message.content}" for message in selected)
 
 
-def _language_instruction(answer_language: str | None) -> str:
+def _conversation_memory_documents(messages: list[BaseMessage]) -> list[Document]:
+    """Expose recent session chat as evidence for user-provided facts."""
+    if not messages:
+        return []
+    lines = []
+    used = 0
+    selected = messages[-settings.max_history_messages:]
+    for index, message in enumerate(reversed(selected)):
+        if message.type != "human":
+            continue
+        content = str(message.content).strip()
+        if not content:
+            continue
+        is_current = index == 0 and message is messages[-1]
+        prefix = "Current user message" if is_current else "User previously said"
+        line = f"{prefix}: {content}"
+        if used + len(line) > 4000 and lines:
+            break
+        lines.append(line)
+        used += len(line)
+    if not lines:
+        return []
+    lines.reverse()
+    return [
+        Document(
+            page_content="\n".join(lines),
+            metadata={
+                "source": "Recent conversation memory",
+                "source_kind": "conversation_memory",
+                "document_id": "session-memory",
+                "rerank_score": 0.75,
+                "metadata_match_score": 0.75,
+            },
+        )
+    ]
+
+
+async def _retrieve_with_memory(
+    question: str,
+    *,
+    session_id: str,
+    messages: list[BaseMessage],
+) -> list[Document]:
+    documents = await retrieve_documents(question, session_id=session_id)
+    return _conversation_memory_documents(messages) + documents
+
+
+def _language_instruction(answer_language: str | None, query_language: str | None = None) -> str:
     if not answer_language or answer_language == "auto":
-        return "Answer in the user's question language."
+        return "Answer in the current user's question language, not older conversation turns."
     return (
-        f"Answer in {answer_language}. Keep quoted source text, citations, code, URLs, "
-        "names, and exact document phrases unchanged."
+        f"The current query language is {query_language or answer_language}. "
+        f"Answer strictly in {answer_language}, even if earlier conversation turns used a "
+        "different language. Keep quoted source text, citations, code, URLs, names, "
+        "and exact document phrases unchanged."
     )
 
 
@@ -50,9 +99,12 @@ def _format_documents(documents: list[Document], max_chars: int = 4000) -> str:
         source_kind = metadata.get("source_kind")
         if not source_kind:
             source_kind = "web_search" if metadata.get("url") else "uploaded_document"
-        source_label = (
-            "Web search result" if source_kind == "web_search" else "Uploaded document"
-        )
+        if source_kind == "web_search":
+            source_label = "Web search result"
+        elif source_kind == "conversation_memory":
+            source_label = "Conversation memory"
+        else:
+            source_label = "Uploaded document"
         source_name = metadata.get("source") or metadata.get("title") or "Unknown source"
         block = f"[{index}] {source_label} — {source_name}\n{doc.page_content.strip()}"
         if used + len(block) > max_chars and blocks:
@@ -190,7 +242,11 @@ def _diversify_ranked_documents(
 
 async def query_classifier(state: State) -> dict:
     question = state["messages"][-1].content
-    documents = await retrieve_documents(question, session_id=state["session_id"])
+    documents = await _retrieve_with_memory(
+        question,
+        session_id=state["session_id"],
+        messages=state["messages"],
+    )
     _log_documents("retrieved", documents)
     prompt = PromptTemplate.from_template(config.prompt("classify_prompt"))
     classifier = get_structured_llm(RouteIdentifier)
@@ -228,7 +284,12 @@ async def query_classifier(state: State) -> dict:
 
 async def general_llm(state: State) -> dict:
     messages = [
-        SystemMessage(content=_language_instruction(state.get("answer_language"))),
+        SystemMessage(
+            content=_language_instruction(
+                state.get("answer_language"),
+                state.get("query_language"),
+            )
+        ),
         *state["messages"],
     ]
     result = await get_llm().ainvoke(messages)
@@ -242,9 +303,10 @@ async def general_llm(state: State) -> dict:
 
 
 async def retriever_node(state: State) -> dict:
-    documents = await retrieve_documents(
+    documents = await _retrieve_with_memory(
         state["latest_query"],
         session_id=state["session_id"],
+        messages=state["messages"],
     )
     return {"documents": documents}
 
@@ -356,6 +418,7 @@ async def generate(state: State) -> dict:
             "context": evidence,
             "retry_instruction": retry_instruction,
             "answer_language": state.get("answer_language", "auto"),
+            "query_language": state.get("query_language", "auto"),
         }
     )
     return {

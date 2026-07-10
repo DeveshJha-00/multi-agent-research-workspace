@@ -131,3 +131,22 @@ async def test_language_detection_falls_back_without_sarvam(monkeypatch):
     monkeypatch.setattr(settings, "sarvam_api_key", "")
     result = await language.SarvamLanguageDetectionService().detect_text("हिंदी सवाल")
     assert result.language_code == "hi-IN"
+
+
+@pytest.mark.asyncio
+async def test_obvious_english_query_bypasses_sarvam_text_lid(monkeypatch):
+    monkeypatch.setattr(settings, "sarvam_api_key", "sarvam-key")
+
+    class FailingClient:
+        async def post(self, *args, **kwargs):
+            raise AssertionError("Sarvam should not be called for obvious English")
+
+    monkeypatch.setattr(
+        language,
+        "SarvamLanguageDetectionService",
+        lambda: language.SarvamLanguageDetectionService(FailingClient()),
+    )
+    result = await language.detect_query_language("i am in class 9. is this exam for me?")
+    assert result.language_code == "en-IN"
+    assert result.script_code == "Latn"
+    assert result.confidence == 1.0
