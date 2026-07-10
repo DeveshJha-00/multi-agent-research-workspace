@@ -48,8 +48,8 @@ class Settings(BaseSettings):
         le=50 * 1024 * 1024,
     )
     sarvam_document_max_output_chars: int = Field(default=60_000, ge=5_000, le=500_000)
-    sarvam_job_poll_seconds: float = Field(default=2.0, ge=0.5, le=30.0)
-    sarvam_job_timeout_seconds: int = Field(default=60, ge=30, le=1200)
+    sarvam_job_poll_seconds: float = Field(default=10.0, ge=0.5, le=30.0)
+    sarvam_job_timeout_seconds: int = Field(default=240, ge=30, le=1200)
     enable_voice_features: bool = True
     sarvam_stt_model: str = "saaras:v3"
     sarvam_stt_mode: Literal["transcribe", "translate", "verbatim", "translit", "codemix"] = "transcribe"

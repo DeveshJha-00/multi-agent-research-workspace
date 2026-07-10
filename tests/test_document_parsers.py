@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -304,3 +305,34 @@ def test_prompt_preserves_resume_institution_names_and_abbreviations():
     prompt = Path("src/config/prompts.yaml").read_text(encoding="utf-8")
     assert "M.S. Ramaiah Institute of Technology" in prompt
     assert "do not interpret" in prompt
+
+
+def test_sarvam_timeout_reports_last_status(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "job_state": "Running",
+                "page_metrics": {
+                    "total_pages": 3,
+                    "pages_processed": 1,
+                    "pages_succeeded": 1,
+                    "pages_failed": 0,
+                },
+            }
+
+    monkeypatch.setattr(document_parsers.requests, "get", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(document_parsers.settings, "sarvam_job_timeout_seconds", 30)
+    monkeypatch.setattr(document_parsers.settings, "sarvam_job_poll_seconds", 10)
+    times = iter([0, 1, 31])
+    monkeypatch.setattr(document_parsers.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+
+    parser = document_parsers.SarvamDocumentParser()
+    with pytest.raises(TimeoutError) as error:
+        parser._wait_for_completion("job-123")
+
+    assert "state=Running" in str(error.value)
+    assert "processed=1/3" in str(error.value)

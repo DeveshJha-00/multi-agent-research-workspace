@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import tempfile
@@ -23,6 +24,7 @@ from src.core.config import settings
 from src.services.language import detect_text_language
 
 SUPPORTED_EXTENSIONS = {".pdf", ".txt"}
+logger = logging.getLogger(__name__)
 NON_ENGLISH_HINTS = {
     "bangla",
     "bengali",
@@ -492,6 +494,7 @@ class SarvamDocumentParser:
 
     def _wait_for_completion(self, job_id: str) -> dict:
         deadline = time.monotonic() + settings.sarvam_job_timeout_seconds
+        last_status: dict = {}
         while time.monotonic() < deadline:
             response = requests.get(
                 f"{self.base_url}/doc-digitization/job/v1/{job_id}/status",
@@ -500,13 +503,45 @@ class SarvamDocumentParser:
             )
             response.raise_for_status()
             status = response.json()
-            state = status.get("job_state")
-            if state in {"Completed", "PartiallyCompleted"}:
+            last_status = status if isinstance(status, dict) else {}
+            state = str(last_status.get("job_state") or "").strip()
+            normalized_state = state.casefold().replace("_", "").replace("-", "").replace(" ", "")
+            logger.info(
+                "sarvam_document_status job_id=%s state=%s progress=%s",
+                job_id,
+                state or "unknown",
+                _sarvam_status_progress(last_status),
+            )
+            if normalized_state in {"completed", "partiallycompleted"}:
                 return status
-            if state == "Failed":
-                raise RuntimeError(status.get("error_message") or "Sarvam parsing failed")
+            if normalized_state == "failed":
+                raise RuntimeError(last_status.get("error_message") or "Sarvam parsing failed")
             time.sleep(settings.sarvam_job_poll_seconds)
-        raise TimeoutError("Sarvam document parsing timed out")
+        raise TimeoutError(
+            "Sarvam document parsing timed out. "
+            f"Last status: state={last_status.get('job_state') or 'unknown'}, "
+            f"progress={_sarvam_status_progress(last_status)}, "
+            f"error={last_status.get('error_message') or ''}"
+        )
+
+
+def _sarvam_status_progress(status: dict) -> str:
+    metrics = status.get("page_metrics")
+    if isinstance(metrics, dict):
+        total = metrics.get("total_pages")
+        processed = metrics.get("pages_processed")
+        succeeded = metrics.get("pages_succeeded")
+        failed = metrics.get("pages_failed")
+        return f"pages processed={processed}/{total}, succeeded={succeeded}, failed={failed}"
+    details = status.get("job_details")
+    if isinstance(details, list) and details:
+        first = details[0] if isinstance(details[0], dict) else {}
+        total = first.get("total_pages")
+        processed = first.get("pages_processed")
+        succeeded = first.get("pages_succeeded")
+        failed = first.get("pages_failed")
+        return f"pages processed={processed}/{total}, succeeded={succeeded}, failed={failed}"
+    return "unavailable"
 
 
 def _pdf_page_count(content: bytes) -> int:
