@@ -10,7 +10,7 @@ from streamlit_app.utils.ui import (
     render_workspace_switcher,
 )
 
-st.set_page_config(page_title="Agentic Research Workspace", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="AgentForge", page_icon="🧭", layout="wide")
 apply_custom_css()
 ensure_workspace_state()
 
@@ -28,7 +28,7 @@ def open_page(page: str, selected_workspace: str) -> None:
         st.switch_page(page)
 
 
-st.title("Agentic Research Workspace")
+st.title("AgentForge - Agentic Research Workspace")
 st.subheader("A demo workspace for document chat, web-augmented answers, and agentic reports.")
 st.write(
     "Upload documents, ask grounded questions, compare information with the web, analyze datasets, "
