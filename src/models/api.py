@@ -24,6 +24,15 @@ class QueryResponse(BaseModel):
     answer_language: str = "en-IN"
 
 
+class ChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatHistoryResponse(BaseModel):
+    messages: list[ChatHistoryMessage]
+
+
 class UploadResponse(BaseModel):
     status: bool
     document_id: str

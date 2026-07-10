@@ -1,4 +1,19 @@
+from uuid import uuid4
+
 import streamlit as st
+
+WORKSPACE_SCOPED_KEYS = {
+    "chat_history",
+    "loaded_chat_session_id",
+    "uploaded_files",
+    "uploaded_datasets",
+    "uploaded_repositories",
+    "research_runs",
+    "response_evaluations",
+    "voice_transcript",
+    "voice_language",
+    "voice_warnings",
+}
 
 
 def apply_custom_css():
@@ -135,3 +150,102 @@ def apply_custom_css():
     
     </style>
     """, unsafe_allow_html=True)
+
+
+def ensure_workspace_state() -> None:
+    """Initialize a lightweight, demo-friendly workspace registry."""
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid4())
+    if "workspaces" not in st.session_state:
+        st.session_state.workspaces = {}
+    workspace_id = st.session_state.session_id
+    if workspace_id not in st.session_state.workspaces:
+        st.session_state.workspaces[workspace_id] = {
+            "id": workspace_id,
+            "name": f"Workspace {len(st.session_state.workspaces) + 1}",
+        }
+
+
+def clear_workspace_caches() -> None:
+    """Clear page-level cached state when switching workspaces."""
+    for key in WORKSPACE_SCOPED_KEYS:
+        st.session_state.pop(key, None)
+
+
+def remember_workspace(workspace_id: str, name: str | None = None) -> None:
+    ensure_workspace_state()
+    workspace_id = workspace_id.strip()
+    if not workspace_id:
+        return
+    st.session_state.workspaces.setdefault(
+        workspace_id,
+        {
+            "id": workspace_id,
+            "name": name or f"Workspace {len(st.session_state.workspaces) + 1}",
+        },
+    )
+
+
+def activate_workspace(workspace_id: str) -> bool:
+    """Activate a workspace ID and return True when the active workspace changed."""
+    ensure_workspace_state()
+    workspace_id = workspace_id.strip()
+    if not workspace_id or workspace_id == st.session_state.session_id:
+        return False
+    remember_workspace(workspace_id)
+    st.session_state.session_id = workspace_id
+    clear_workspace_caches()
+    return True
+
+
+def create_workspace(name: str | None = None) -> str:
+    ensure_workspace_state()
+    workspace_id = str(uuid4())
+    st.session_state.workspaces[workspace_id] = {
+        "id": workspace_id,
+        "name": name or f"Workspace {len(st.session_state.workspaces) + 1}",
+    }
+    activate_workspace(workspace_id)
+    return workspace_id
+
+
+def workspace_label(workspace_id: str) -> str:
+    workspace = st.session_state.workspaces.get(workspace_id, {})
+    name = workspace.get("name") or workspace_id[:8]
+    return f"{name} · {workspace_id[:8]}"
+
+
+def render_workspace_switcher(*, compact: bool = False) -> None:
+    """Render controls for demo-only multi-workspace navigation."""
+    ensure_workspace_state()
+    if compact:
+        st.subheader("Workspace")
+    else:
+        st.header("Workspaces")
+
+    workspace_ids = list(st.session_state.workspaces)
+    active_id = st.session_state.session_id
+    selected_id = st.selectbox(
+        "Active workspace",
+        workspace_ids,
+        index=workspace_ids.index(active_id),
+        format_func=workspace_label,
+        key="workspace-selector",
+    )
+    if selected_id != active_id and activate_workspace(selected_id):
+        st.rerun()
+
+    rename_key = f"workspace-rename-{st.session_state.session_id}"
+    current_name = st.session_state.workspaces[st.session_state.session_id]["name"]
+    new_name = st.text_input("Workspace name", value=current_name, key=rename_key)
+    if st.button("Save name", key="save-workspace-name"):
+        st.session_state.workspaces[st.session_state.session_id]["name"] = (
+            new_name.strip() or current_name
+        )
+        st.rerun()
+
+    if st.button("New workspace", key="new-workspace"):
+        create_workspace()
+        st.rerun()
+
+    st.caption(f"ID: `{st.session_state.session_id}`")

@@ -137,6 +137,28 @@ def test_chat_client_sends_language_metadata(monkeypatch):
     assert captured["json"]["answer_language"] == "hi-IN"
 
 
+def test_chat_history_client_loads_workspace_messages(monkeypatch):
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return FakeResponse(
+            {
+                "messages": [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "assistant", "content": "Hi there"},
+                ]
+            }
+        )
+
+    monkeypatch.setattr(api_client.requests, "get", fake_get)
+    messages = api_client.get_chat_history("session-123")
+    assert messages[0]["role"] == "user"
+    assert messages[1]["content"] == "Hi there"
+    assert captured["headers"]["X-Session-ID"] == "session-123"
+
+
 def test_voice_clients_call_speech_endpoints(monkeypatch):
     captured = {}
 

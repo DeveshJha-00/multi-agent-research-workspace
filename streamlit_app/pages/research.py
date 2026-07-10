@@ -11,6 +11,7 @@ from streamlit_app.utils.api_client import (
     document_upload_rag,
     download_artifact,
     get_datasets,
+    get_indexed_documents,
     get_repositories,
     get_research_job,
     get_research_jobs,
@@ -19,7 +20,7 @@ from streamlit_app.utils.api_client import (
     retry_research_job,
     stream_research_events,
 )
-from streamlit_app.utils.ui import apply_custom_css
+from streamlit_app.utils.ui import apply_custom_css, render_workspace_switcher
 
 st.set_page_config(page_title="Agentic Research", page_icon="🧭", layout="wide")
 apply_custom_css()
@@ -33,6 +34,9 @@ st.session_state.setdefault("research_runs", [])
 st.session_state.setdefault("uploaded_files", {})
 st.session_state.setdefault("uploaded_datasets", {})
 st.session_state.setdefault("uploaded_repositories", {})
+st.session_state.uploaded_files = {
+    item["document_id"]: item for item in get_indexed_documents(st.session_state.session_id)
+}
 
 
 def _render_event(event: dict) -> None:
@@ -112,6 +116,9 @@ if st.button("Back to chat"):
     st.switch_page("pages/chat.py")
 
 with st.sidebar:
+    render_workspace_switcher(compact=True)
+    st.divider()
+
     st.header("Workspace inputs")
     input_type = st.radio("Upload type", ["Document", "Dataset", "Repository"])
 
@@ -174,11 +181,6 @@ with st.sidebar:
     for item in repositories:
         languages = ", ".join(item.get("languages", {})) or "unknown language"
         st.caption(f"Repository | {item['filename']} | {item['file_count']} files | {languages}")
-
-    if st.button("New workspace"):
-        for key in list(st.session_state):
-            del st.session_state[key]
-        st.switch_page("home.py")
 
 available_data = [
     f"Uploaded document: {item['filename']}" for item in st.session_state.uploaded_files.values()

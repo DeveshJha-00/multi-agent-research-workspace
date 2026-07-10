@@ -10,6 +10,7 @@ import streamlit.components.v1 as components
 from streamlit_app.utils.api_client import (
     create_evaluation,
     document_upload_rag,
+    get_chat_history,
     get_evaluation,
     get_evaluations,
     get_indexed_documents,
@@ -18,7 +19,7 @@ from streamlit_app.utils.api_client import (
     synthesize_speech,
     transcribe_speech,
 )
-from streamlit_app.utils.ui import apply_custom_css
+from streamlit_app.utils.ui import apply_custom_css, render_workspace_switcher
 
 st.set_page_config(page_title="Adaptive RAG Chat", page_icon="💬", layout="wide")
 apply_custom_css()
@@ -28,8 +29,12 @@ if "session_id" not in st.session_state:
     st.page_link("home.py", label="Go to home")
     st.stop()
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+if (
+    "chat_history" not in st.session_state
+    or st.session_state.get("loaded_chat_session_id") != st.session_state.session_id
+):
+    st.session_state.chat_history = get_chat_history(st.session_state.session_id)
+    st.session_state.loaded_chat_session_id = st.session_state.session_id
 if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = {}
 st.session_state.setdefault("response_evaluations", {})
@@ -250,6 +255,9 @@ st.info(
 )
 
 with st.sidebar:
+    render_workspace_switcher(compact=True)
+    st.divider()
+
     voice_capabilities = get_voice_capabilities()
     st.header("Voice")
     st.session_state.voice_answers_enabled = st.toggle(
@@ -314,11 +322,6 @@ with st.sidebar:
         st.subheader("Indexed this session")
         for item in st.session_state.uploaded_files.values():
             st.caption(f"{item['filename']} · {item['chunks_indexed']} chunks")
-
-    if st.button("New workspace"):
-        for key in list(st.session_state):
-            del st.session_state[key]
-        st.switch_page("home.py")
 
 st.subheader("Voice input")
 audio_input = st.audio_input("Record a question")

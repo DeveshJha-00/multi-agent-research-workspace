@@ -25,6 +25,8 @@ from src.db.rag_response_store import (
 from src.evaluation.ragas_evaluator import metric_names_for
 from src.memory.chat_history_mongo import ChatHistory
 from src.models.api import (
+    ChatHistoryMessage,
+    ChatHistoryResponse,
     DeleteResponse,
     EvaluationCreated,
     EvaluationRequest,
@@ -53,6 +55,20 @@ from src.services.speech import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/rag", tags=["rag"])
+
+
+@router.get("/history", response_model=ChatHistoryResponse)
+async def get_history(
+    session_id: Annotated[str, Header(alias="X-Session-ID", min_length=8, max_length=200)],
+) -> ChatHistoryResponse:
+    messages = await ChatHistory.get_session_history(session_id).get_messages()
+    output = []
+    for message in messages:
+        if message.type == "human":
+            output.append(ChatHistoryMessage(role="user", content=str(message.content)))
+        elif message.type == "ai":
+            output.append(ChatHistoryMessage(role="assistant", content=str(message.content)))
+    return ChatHistoryResponse(messages=output)
 
 
 @router.post("/query", response_model=QueryResponse)

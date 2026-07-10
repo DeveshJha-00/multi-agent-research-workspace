@@ -55,6 +55,20 @@ def query_backend(
         }
 
 
+def get_chat_history(session_id: str) -> list[dict]:
+    try:
+        response = requests.get(
+            f"{PYTHON_BASE_URL}/rag/history",
+            headers={"X-Session-ID": session_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json().get("messages", [])
+    except requests.RequestException as exc:
+        _error(exc, "Unable to load chat history")
+        return []
+
+
 def transcribe_speech(file, session_id: str) -> dict:
     try:
         response = requests.post(
